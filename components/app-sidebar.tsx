@@ -12,7 +12,7 @@ import { NavSecondary } from "./nav-secondary"
 import { NavUser }      from "./nav-user"
 
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot } from "firebase/firestore"
+import { collection, onSnapshot, doc, getDoc } from "firebase/firestore"
 
 import {
   LayoutDashboard, CalendarCheck, FileText, Monitor, ClipboardCheck,
@@ -83,9 +83,11 @@ function getDeptStyle(dept: string) {
 
 function getRoleStyle(role: string) {
   const r = role?.toUpperCase()
-  if (r === "SUPER ADMIN") return "bg-zinc-900 text-white"
-  if (r === "MANAGER")     return "bg-blue-600 text-white"
-  if (r === "LEADER")      return "bg-violet-100 text-violet-700"
+  if (r === "SUPER ADMIN")              return "bg-zinc-900 text-white"
+  if (r === "MANAGER" || r === "SALES HEAD") return "bg-blue-600 text-white"
+  if (r === "TERRITORY SALES MANAGER")  return "bg-amber-100 text-amber-700"
+  if (r === "TERRITORY SALES ASSOCIATE")return "bg-orange-100 text-orange-700"
+  if (r === "LEADER")                   return "bg-violet-100 text-violet-700"
   return "bg-zinc-100 text-zinc-600"
 }
 
@@ -131,21 +133,67 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
     }
     const run = async () => {
       try {
-        const res  = await fetch(`/api/user?id=${encodeURIComponent(userId)}`)
-        const data = await res.json()
-        const role = typeof window !== "undefined"
-          ? (localStorage.getItem("userRole") || "MEMBER") : "MEMBER"
-        const dept = typeof window !== "undefined"
-          ? (localStorage.getItem("userDepartment") || data.Department || "")
-          : (data.Department || "")
+        // Fetch both MongoDB and Firestore data
+        const [mongoRes, firestoreDoc] = await Promise.all([
+          fetch(`/api/user?id=${encodeURIComponent(userId)}`),
+          getDoc(doc(db, "users", userId))
+        ])
+        const mongoData = await mongoRes.json()
+        
+        const dept = (mongoData.Department || "").toUpperCase()
+        const position = (mongoData.Position || "").toUpperCase()
+        
+        // Get full role name from Firestore (for display)
+        const firestoreRoleFull = firestoreDoc.exists() 
+          ? (firestoreDoc.data().Role || firestoreDoc.data().role || "MEMBER").toUpperCase()
+          : "MEMBER"
+        
+        /**
+         * ROLE DETECTION:
+         * - Display Role: Use full Firestore role name (TERRITORY SALES MANAGER, MANAGER, etc.)
+         * - Logic Role: Use abbreviated for permissions (TSM, TSA, MANAGER)
+         */
+        const isSalesDept = dept === "SALES"
+        
+        // Sales-specific role detection based on Position
+        const isTSM = isSalesDept 
+          ? (position.includes("TERRITORY SALES MANAGER") && !position.includes("ASSOCIATE"))
+          : (firestoreRoleFull === "TSM" || firestoreRoleFull === "TERRITORY SALES MANAGER")
+        
+        const isTSA = isSalesDept && position.includes("TERRITORY SALES ASSOCIATE")
+        
+        const isManager = isSalesDept
+          ? (position.includes("SALES HEAD") || (position.includes("MANAGER") && !position.includes("TERRITORY")))
+          : (firestoreRoleFull === "MANAGER" || firestoreRoleFull === "SALES HEAD")
+        
+        // Determine abbreviated role for logic/permissions
+        let logicRole = firestoreRoleFull
+        if (isManager) logicRole = "MANAGER"
+        else if (isTSM) logicRole = "TSM"
+        else if (isTSA) logicRole = "TSA"
+        
+        // Display role: Use Firestore full name or Position
+        let displayRole = firestoreRoleFull
+        if (isSalesDept && position && !position.includes("MEMBER")) {
+          displayRole = position  // Use full Position for Sales
+        }
+        
+        // Update localStorage for consistency with other components
+        // Use full role name for permissions lookup (e.g., "TERRITORY SALES MANAGER" not "TSM")
+        if (typeof window !== "undefined") {
+          localStorage.setItem("userRole", displayRole)
+          localStorage.setItem("userDepartment", dept)
+          localStorage.setItem("userRoleShort", logicRole) // Keep abbreviated for logic checks
+        }
+        
         setUserDetails({
-          UserId:         data._id || userId,
-          Firstname:      data.Firstname      || "",
-          Lastname:       data.Lastname       || "",
-          Email:          data.Email          || "",
-          profilePicture: data.profilePicture || "/avatars/default.jpg",
+          UserId:         mongoData._id || userId,
+          Firstname:      mongoData.Firstname      || "",
+          Lastname:       mongoData.Lastname       || "",
+          Email:          mongoData.Email          || "",
+          profilePicture: mongoData.profilePicture || "/avatars/default.jpg",
           Department:     dept,
-          Role:           role,
+          Role:           displayRole,  // Full name for display
         })
       } catch (e) {
         console.error("Sidebar user fetch:", e)

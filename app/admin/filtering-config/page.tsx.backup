@@ -1,0 +1,541 @@
+"use client"
+
+import * as React from "react"
+import { useState, useEffect } from "react"
+import { useSearchParams } from "next/navigation"
+import { collection, doc, setDoc, onSnapshot } from "firebase/firestore"
+import { db } from "@/lib/firebase"
+import { AppSidebar } from "@/components/app-sidebar"
+import ProtectedPageWrapper from "@/components/protected-page-wrapper"
+import { PageHeader } from "@/components/page-header"
+import { cn } from "@/lib/utils"
+import {
+    SidebarInset,
+    SidebarProvider,
+} from "@/components/ui/sidebar"
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import { Badge } from "@/components/ui/badge"
+import { Separator } from "@/components/ui/separator"
+import { Skeleton } from "@/components/ui/skeleton"
+import { 
+    Settings, 
+    Shield, 
+    Users, 
+    Building2, 
+    Save, 
+    RefreshCw, 
+    Eye, 
+    EyeOff,
+    CheckCircle2,
+    AlertCircle,
+    Code2,
+    Filter,
+    Layers,
+    EyeIcon,
+    Trash2,
+    Plus,
+    Info
+} from "lucide-react"
+import { toast } from "sonner"
+
+interface FilteringRule {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  conditions: {
+    role: string[]
+    department: string[]
+    status: string[]
+  }
+  visibility: "own_only" | "subordinates" | "department" | "all"
+  excludeStatuses: string[]
+}
+
+interface DepartmentConfig {
+  id: string
+  name: string
+  roles: string[]
+  hasSubordinateHierarchy: boolean
+  managerRole: string
+  subordinateRole: string
+}
+
+const DEFAULT_RULES: FilteringRule[] = [
+  {
+    id: "site_visit_sales",
+    name: "Site Visit - Sales View",
+    description: "Sales team sees PENDING and SUBMITTED site visits",
+    enabled: true,
+    conditions: {
+      role: ["TSM", "TSA", "SALES HEAD"],
+      department: ["SALES"],
+      status: ["PENDING", "SUBMITTED", "CONFIRMED"]
+    },
+    visibility: "subordinates",
+    excludeStatuses: ["COMPLETED", "CANCELLED", "DONE"]
+  },
+  {
+    id: "site_visit_engineering",
+    name: "Site Visit - Engineering View",
+    description: "Engineering sees CONFIRMED, SCHEDULED, APPROVED site visits",
+    enabled: true,
+    conditions: {
+      role: ["ENGINEER", "MANAGER", "LEADER"],
+      department: ["ENGINEERING", "IT"],
+      status: ["CONFIRMED", "SCHEDULED", "APPROVED"]
+    },
+    visibility: "department",
+    excludeStatuses: ["COMPLETED", "CANCELLED", "DONE"]
+  },
+  {
+    id: "job_request_sales",
+    name: "Job Request - Sales View",
+    description: "Sales sees PENDING, SUBMITTED, AWAITING job requests",
+    enabled: true,
+    conditions: {
+      role: ["TSM", "TSA", "SALES HEAD"],
+      department: ["SALES"],
+      status: ["PENDING", "SUBMITTED", "AWAITING"]
+    },
+    visibility: "subordinates",
+    excludeStatuses: ["COMPLETED", "CANCELLED", "DONE"]
+  },
+  {
+    id: "manager_override",
+    name: "Manager Override",
+    description: "Managers see all non-completed records regardless of status",
+    enabled: true,
+    conditions: {
+      role: ["MANAGER", "SALES HEAD", "SUPER ADMIN"],
+      department: ["*"],
+      status: ["*"]
+    },
+    visibility: "all",
+    excludeStatuses: ["COMPLETED", "CANCELLED", "DONE"]
+  }
+]
+
+const DEPARTMENTS: DepartmentConfig[] = [
+  {
+    id: "sales",
+    name: "Sales",
+    roles: ["TERRITORY SALES MANAGER", "TERRITORY SALES ASSOCIATE", "SALES HEAD"],
+    hasSubordinateHierarchy: true,
+    managerRole: "TERRITORY SALES MANAGER",
+    subordinateRole: "TERRITORY SALES ASSOCIATE"
+  },
+  {
+    id: "engineering",
+    name: "Engineering",
+    roles: ["ENGINEER", "LEADER", "MANAGER"],
+    hasSubordinateHierarchy: false,
+    managerRole: "MANAGER",
+    subordinateRole: "ENGINEER"
+  },
+  {
+    id: "it",
+    name: "IT",
+    roles: ["ADMIN", "SUPPORT", "MANAGER", "SUPER ADMIN"],
+    hasSubordinateHierarchy: false,
+    managerRole: "MANAGER",
+    subordinateRole: "SUPPORT"
+  },
+  {
+    id: "procurement",
+    name: "Procurement",
+    roles: ["PROCUREMENT OFFICER", "MANAGER"],
+    hasSubordinateHierarchy: false,
+    managerRole: "MANAGER",
+    subordinateRole: "PROCUREMENT OFFICER"
+  }
+]
+
+export default function FilteringConfigPage() {
+  const [rules, setRules] = useState<FilteringRule[]>(DEFAULT_RULES)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [activeTab, setActiveTab] = useState<"rules" | "departments" | "preview">("rules")
+
+  useEffect(() => {
+    // Load existing config from Firestore
+    const unsub = onSnapshot(
+      doc(collection(db, "system_config"), "filtering_rules"),
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data()
+          if (data.rules) {
+            setRules(data.rules)
+          }
+        }
+        setLoading(false)
+      },
+      (error) => {
+        console.error("Error loading config:", error)
+        setLoading(false)
+      }
+    )
+
+    return () => unsub()
+  }, [])
+
+  const saveConfig = async () => {
+    setSaving(true)
+    try {
+      await setDoc(doc(collection(db, "system_config"), "filtering_rules"), {
+        rules,
+        updatedAt: new Date().toISOString(),
+        updatedBy: "IT_ADMIN"
+      })
+      toast.success("Configuration saved successfully")
+    } catch (error) {
+      console.error("Error saving config:", error)
+      toast.error("Failed to save configuration")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const resetToDefaults = () => {
+    if (confirm("Are you sure you want to reset all rules to defaults?")) {
+      setRules(DEFAULT_RULES)
+      toast.info("Rules reset to defaults. Click Save to apply.")
+    }
+  }
+
+  const toggleRule = (ruleId: string) => {
+    setRules(prev => prev.map(rule => 
+      rule.id === ruleId ? { ...rule, enabled: !rule.enabled } : rule
+    ))
+  }
+
+  const updateRule = (ruleId: string, updates: Partial<FilteringRule>) => {
+    setRules(prev => prev.map(rule => 
+      rule.id === ruleId ? { ...rule, ...updates } : rule
+    ))
+  }
+
+  const addNewRule = () => {
+    const newRule: FilteringRule = {
+      id: `custom_${Date.now()}`,
+      name: "New Custom Rule",
+      description: "Describe what this rule does",
+      enabled: true,
+      conditions: {
+        role: [],
+        department: [],
+        status: []
+      },
+      visibility: "own_only",
+      excludeStatuses: ["COMPLETED", "CANCELLED"]
+    }
+    setRules(prev => [...prev, newRule])
+  }
+
+  const deleteRule = (ruleId: string) => {
+    if (confirm("Delete this rule?")) {
+      setRules(prev => prev.filter(rule => rule.id !== ruleId))
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <RefreshCw className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    )
+  }
+
+  return (
+    <div className="container mx-auto py-8 max-w-7xl">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-3">
+            <Settings className="w-8 h-8 text-primary" />
+            Filtering & Visibility Config
+          </h1>
+          <p className="text-muted-foreground mt-2">
+            Manage role-based filtering rules and visibility settings across all departments
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={resetToDefaults}>
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Reset
+          </Button>
+          <Button onClick={saveConfig} disabled={saving}>
+            <Save className="w-4 h-4 mr-2" />
+            {saving ? "Saving..." : "Save Changes"}
+          </Button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2 mb-6">
+        <Button
+          variant={activeTab === "rules" ? "default" : "outline"}
+          onClick={() => setActiveTab("rules")}
+        >
+          <Shield className="w-4 h-4 mr-2" />
+          Filtering Rules
+        </Button>
+        <Button
+          variant={activeTab === "departments" ? "default" : "outline"}
+          onClick={() => setActiveTab("departments")}
+        >
+          <Building2 className="w-4 h-4 mr-2" />
+          Departments
+        </Button>
+        <Button
+          variant={activeTab === "preview" ? "default" : "outline"}
+          onClick={() => setActiveTab("preview")}
+        >
+          <Eye className="w-4 h-4 mr-2" />
+          Preview
+        </Button>
+      </div>
+
+      {/* Rules Tab */}
+      {activeTab === "rules" && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold">Active Filtering Rules</h2>
+            <Button onClick={addNewRule} variant="outline">
+              + Add Custom Rule
+            </Button>
+          </div>
+
+          {rules.map((rule, index) => (
+            <Card key={rule.id} className={rule.enabled ? "" : "opacity-60"}>
+              <CardHeader className="pb-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-1">
+                      <Switch
+                        checked={rule.enabled}
+                        onCheckedChange={() => toggleRule(rule.id)}
+                      />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg flex items-center gap-2">
+                        {rule.name}
+                        {rule.enabled ? (
+                          <Badge variant="default" className="bg-green-500">
+                            <CheckCircle2 className="w-3 h-3 mr-1" />
+                            Active
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary">
+                            <EyeOff className="w-3 h-3 mr-1" />
+                            Disabled
+                          </Badge>
+                        )}
+                      </CardTitle>
+                      <CardDescription className="mt-1">
+                        {rule.description}
+                      </CardDescription>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => deleteRule(rule.id)}
+                    className="text-destructive"
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                      Applies to Roles
+                    </Label>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {rule.conditions.role.map(role => (
+                        <Badge key={role} variant="outline">{role}</Badge>
+                      ))}
+                      {rule.conditions.role.length === 0 && (
+                        <span className="text-sm text-muted-foreground">All roles</span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                      Departments
+                    </Label>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {rule.conditions.department.map(dept => (
+                        <Badge key={dept} variant="outline">{dept}</Badge>
+                      ))}
+                      {rule.conditions.department.length === 0 && (
+                        <span className="text-sm text-muted-foreground">All departments</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                      Count Statuses
+                    </Label>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {rule.conditions.status.map(status => (
+                        <Badge key={status} variant="secondary">{status}</Badge>
+                      ))}
+                      {rule.conditions.status.includes("*") && (
+                        <Badge variant="secondary">ALL</Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                      Exclude Statuses
+                    </Label>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {rule.excludeStatuses.map(status => (
+                        <Badge key={status} variant="destructive">{status}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div>
+                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                    Visibility Scope
+                  </Label>
+                  <div className="flex items-center gap-2 mt-2">
+                    <Badge 
+                      variant={rule.visibility === "own_only" ? "default" : "outline"}
+                      className="cursor-pointer"
+                      onClick={() => updateRule(rule.id, { visibility: "own_only" })}
+                    >
+                      Own Records Only
+                    </Badge>
+                    <Badge 
+                      variant={rule.visibility === "subordinates" ? "default" : "outline"}
+                      className="cursor-pointer"
+                      onClick={() => updateRule(rule.id, { visibility: "subordinates" })}
+                    >
+                      + Subordinates
+                    </Badge>
+                    <Badge 
+                      variant={rule.visibility === "department" ? "default" : "outline"}
+                      className="cursor-pointer"
+                      onClick={() => updateRule(rule.id, { visibility: "department" })}
+                    >
+                      Full Department
+                    </Badge>
+                    <Badge 
+                      variant={rule.visibility === "all" ? "default" : "outline"}
+                      className="cursor-pointer"
+                      onClick={() => updateRule(rule.id, { visibility: "all" })}
+                    >
+                      All Records
+                    </Badge>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Departments Tab */}
+      {activeTab === "departments" && (
+        <div className="space-y-6">
+          <h2 className="text-xl font-semibold">Department Hierarchy</h2>
+          
+          <div className="grid grid-cols-2 gap-4">
+            {DEPARTMENTS.map(dept => (
+              <Card key={dept.id}>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Building2 className="w-5 h-5" />
+                    {dept.name}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+                      Available Roles
+                    </Label>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {dept.roles.map(role => (
+                        <Badge key={role} variant="outline">{role}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <Separator />
+                  
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Subordinate Hierarchy</span>
+                    <Badge variant={dept.hasSubordinateHierarchy ? "default" : "secondary"}>
+                      {dept.hasSubordinateHierarchy ? "Enabled" : "Disabled"}
+                    </Badge>
+                  </div>
+                  
+                  {dept.hasSubordinateHierarchy && (
+                    <div className="text-sm text-muted-foreground">
+                      <p><strong>Manager:</strong> {dept.managerRole}</p>
+                      <p><strong>Subordinate:</strong> {dept.subordinateRole}</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Preview Tab */}
+      {activeTab === "preview" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Code2 className="w-5 h-5" />
+              Configuration JSON
+            </CardTitle>
+            <CardDescription>
+              Raw configuration data for debugging and export
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <pre className="bg-muted p-4 rounded-lg text-xs overflow-auto max-h-[500px]">
+              {JSON.stringify({ rules, departments: DEPARTMENTS }, null, 2)}
+            </pre>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Info Banner */}
+      <div className="mt-8 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-3">
+        <AlertCircle className="w-5 h-5 text-blue-600 mt-0.5" />
+        <div className="text-sm text-blue-800">
+          <p className="font-semibold">How it works:</p>
+          <p className="mt-1">
+            Changes to these rules affect how dashboard counts and list views filter records 
+            across all departments. The system evaluates rules in order, and the first matching 
+            rule determines the visibility and count behavior.
+          </p>
+          <p className="mt-2">
+            <strong>Debug tip:</strong> Check browser console for [Dashboard Debug] and 
+            [SiteVisit Debug] logs to verify filtering is working correctly.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}

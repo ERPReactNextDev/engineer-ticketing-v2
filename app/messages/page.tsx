@@ -8,23 +8,28 @@ import {
     Search, Loader2, MessageSquare, ChevronLeft, Hash, 
     LayoutGrid, Lightbulb, FileText, Hammer, Layers, 
     Sparkles, Bell, Clock, Filter, ExternalLink, Activity,
-    Users, Settings2
+    Users, Settings2, Package
 } from "lucide-react";
 import { db } from "@/lib/firebase";
 import { collection, onSnapshot } from "firebase/firestore";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import ChatMessageListItem from "@/components/chat-message-list-item";
 
 // Components
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import ProtectedPageWrapper from "../../components/protected-page-wrapper";
 import { PageHeader } from "@/components/page-header";
-import { CollaborationHub } from "@/components/collaboration-hub";
+import ChatConversation from "@/components/chat-conversation";
 
 const COLLECTIONS = [
     { id: "dialux_requests", label: "DIALux", icon: Lightbulb, color: "text-amber-500", bg: "bg-amber-50" },
     { id: "job_requests", label: "Job Requests", icon: Hammer, color: "text-blue-500", bg: "bg-blue-50" },
     { id: "shop_drawing_requests", label: "Shop Drawings", icon: Layers, color: "text-emerald-500", bg: "bg-emerald-50" },
+    { id: "appointments", label: "Site Visits", icon: Users, color: "text-indigo-500", bg: "bg-indigo-50" },
+    { id: "spf_creations", label: "SPF Products", icon: Package, color: "text-rose-500", bg: "bg-rose-50" },
     { id: "other_requests", label: "Others", icon: FileText, color: "text-slate-500", bg: "bg-slate-50" }
 ];
 
@@ -46,12 +51,19 @@ function MessagesContent() {
     
     const [userId, setUserId] = useState<string | null>(null);
     const [userData, setUserData] = useState<any>(null);
+    const [userRole, setUserRole] = useState<string>("");
+    const [userDept, setUserDept] = useState<string>("");
+    const [subordinateIds, setSubordinateIds] = useState<string[]>([]);
     const [allRequests, setAllRequests] = useState<any[]>([]);
     const [selectedRequest, setSelectedRequest] = useState<{id: string, coll: string} | null>(null);
     const [searchTerm, setSearchTerm] = useState("");
     const [filterCategory, setFilterCategory] = useState<string>("all");
+    const [isSearching, setIsSearching] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
 
     const getProjectLink = (coll: string, id: string) => {
+        if (coll === 'appointments') return `/appointments/site-visit/${id}`;
+        if (coll === 'spf_creations') return `/request/product/${id}`;
         const path = coll.replace('_requests', '').replace('_', '-');
         return `/request/${path}/${id}`;
     };
@@ -59,24 +71,94 @@ function MessagesContent() {
     // User Data Initialization
     useEffect(() => {
         const storedId = localStorage.getItem("userId");
+        if (!storedId) return;
         setUserId(storedId);
-        if (storedId) {
-            fetch(`/api/user?id=${encodeURIComponent(storedId)}`)
-                .then(res => res.json())
-                .then(data => setUserData(data))
-                .catch(console.error);
-        }
+
+        fetch(`/api/user?id=${encodeURIComponent(storedId)}`)
+            .then(res => res.json())
+            .then(async (mongoData) => {
+                setUserData(mongoData);
+                const dept = (mongoData.Department || mongoData.department || "").toUpperCase();
+                const position = (mongoData.Position || "").toUpperCase();
+                
+                // Get Firestore role for strict detection
+                const { doc, getDoc } = await import("firebase/firestore");
+                const userDoc = await getDoc(doc(db, "users", storedId));
+                const firestoreRole = (userDoc.exists() ? (userDoc.data().Role || userDoc.data().role || "MEMBER") : "MEMBER").toUpperCase();
+                
+                const isSalesDept = dept === "SALES";
+                const isManager = firestoreRole === "MANAGER" || firestoreRole === "SALES HEAD" || (isSalesDept && (position === "MANAGER" || position === "SALES HEAD" || position.includes("GENERAL MANAGER")));
+                const isTSM = firestoreRole === "TSM" || firestoreRole === "TERRITORY SALES MANAGER" || (isSalesDept && position.includes("TERRITORY SALES MANAGER"));
+                const finalRole = isManager ? "MANAGER" : (isTSM ? "TSM" : firestoreRole);
+                
+                setUserRole(finalRole);
+                setUserDept(dept);
+                
+                // Fetch subordinates if needed
+                if (isTSM || isManager) {
+                    const usersRes = await fetch('/api/user');
+                    const allUsers: any[] = await usersRes.json();
+                    
+                    const clean = (n: string) => (n || "").replace(/,/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+                    const name = `${mongoData.Firstname || ""} ${mongoData.Lastname || ""}`.trim();
+                    const referenceId = (mongoData.ReferenceID || "").toUpperCase();
+                    const myCleanName = clean(name);
+                    
+                    let subs: any[] = [];
+                    if (isTSM) {
+                        subs = allUsers.filter(u => {
+                            const uRole = (u.Role || u.role || "MEMBER").toUpperCase();
+                            const uPosition = (u.Position || "").toUpperCase();
+                            if (uRole === "TSM" || uPosition.includes("TERRITORY SALES MANAGER")) return false;
+                            
+                            const uTSM = clean(u.TSM);
+                            const uTSMName = clean(u.TSMName);
+                            const uTSM_low = clean(u.tsm);
+                            const uTSMName_low = clean(u.tsmName);
+                            
+                            return (uTSM && uTSM === myCleanName) || 
+                                   (uTSM && uTSM === referenceId) ||
+                                   (uTSMName && uTSMName === myCleanName) || 
+                                   (uTSM_low && uTSM_low === myCleanName) ||
+                                   (uTSM_low && uTSM_low === referenceId) || 
+                                   (uTSMName_low && uTSMName_low === myCleanName);
+                        });
+                    } else if (isManager) {
+                        subs = allUsers.filter(u => {
+                            const uMan = clean(u.Manager);
+                            const uManName = clean(u.ManagerName);
+                            const uMan_low = clean(u.manager);
+                            const uManName_low = clean(u.managerName);
+                            
+                            return (uMan && uMan === myCleanName) || 
+                                   (uMan && uMan === referenceId) ||
+                                   (uManName && uManName === myCleanName) || 
+                                   (uMan_low && uMan_low === myCleanName) ||
+                                   (uMan_low && uMan_low === referenceId) || 
+                                   (uManName_low && uManName_low === myCleanName);
+                        });
+                    }
+                    setSubordinateIds(subs.map(u => u._id));
+                }
+            })
+            .catch(console.error);
     }, []);
 
-    // Real-time Firestore Sync
+    // Remove the redundant subordinate fetching useEffect
+
+    // Real-time Firestore Sync with Security Filtering
     useEffect(() => {
         if (!db || !userId) return;
+
+        const isManager = userRole === "MANAGER";
+        const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || isManager || userRole === "LEADER" || userRole === "SUPER ADMIN";
+        const isTSM = userRole === "TSM";
 
         const unsubscribes = COLLECTIONS.map(coll => {
             return onSnapshot(collection(db, coll.id), (snapshot) => {
                 setAllRequests(prev => {
                     const others = prev.filter(p => p.sourceCollection !== coll.id);
-                    const current = snapshot.docs.map(d => {
+                    let current = snapshot.docs.map(d => {
                         const data = d.data();
                         const unreadCount = (data.messages || []).filter((m: any) => 
                             m.senderId !== userId && !m.seenBy?.includes(userId)
@@ -99,6 +181,28 @@ function MessagesContent() {
                         };
                     });
 
+                    /**
+                     * SECURITY FILTERING:
+                     * - IT, ENGINEERING, SUPER ADMIN, LEADER, MANAGER: See all requests
+                     * - TSM: See own requests + subordinate requests
+                     * - TSA/MEMBER: See own requests only
+                     */
+                    if (!hasGlobalAccess) {
+                        current = current.filter((r: any) => {
+                             const possibleOwners = [
+                                 r.submittedBy, r.createdBy, r.userId, r.pic, 
+                                 r.assignedTo, r.UserId, r.UserId_low
+                             ].filter(Boolean);
+                             const isOwner = possibleOwners.includes(userId);
+                             if (isOwner) return true;
+                             
+                             if (isTSM) {
+                                 return possibleOwners.some((id: string) => subordinateIds.includes(id));
+                             }
+                             return false;
+                         });
+                    }
+
                     const merged = [...others, ...current].sort((a, b) => b.sortKey - a.sortKey);
                     
                     if (initialId && !selectedRequest) {
@@ -111,11 +215,50 @@ function MessagesContent() {
         });
 
         return () => unsubscribes.forEach(unsub => unsub());
-    }, [userId, initialId, selectedRequest]);
+    }, [userId, userRole, userDept, subordinateIds, initialId, selectedRequest]);
+
+    const getStatusInfo = (status: string) => {
+        const s = (status || "").toUpperCase();
+        if (s.includes("PENDING") || s.includes("REVIEW")) return { label: "PENDING", color: "bg-amber-500", bg: "bg-amber-50" };
+        if (s.includes("APPROVED") || s.includes("CONFIRMED") || s.includes("CONFIRM")) return { label: "APPROVED", color: "bg-emerald-500", bg: "bg-emerald-50" };
+        if (s.includes("COMPLETED") || s.includes("DONE") || s.includes("FINISHED")) return { label: "DONE", color: "bg-blue-500", bg: "bg-blue-50" };
+        if (s.includes("CANCEL") || s.includes("REJECT")) return { label: "CANCELLED", color: "bg-rose-500", bg: "bg-rose-50" };
+        if (s.includes("PROGRESS") || s.includes("PROCESS")) return { label: "IN PROGRESS", color: "bg-indigo-500", bg: "bg-indigo-50" };
+        return { label: s || "ACTIVE", color: "bg-slate-400", bg: "bg-slate-50" };
+    };
+
+    const [pinnedIds, setPinnedIds] = useState<string[]>([]);
+    
+    // Feature: Load/Save Pinned Projects
+    useEffect(() => {
+        const stored = localStorage.getItem("pinned_clusters");
+        if (stored) setPinnedIds(JSON.parse(stored));
+    }, []);
+
+    const togglePin = (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        const next = pinnedIds.includes(id) 
+            ? pinnedIds.filter(p => p !== id) 
+            : [...pinnedIds, id];
+        setPinnedIds(next);
+        localStorage.setItem("pinned_clusters", JSON.stringify(next));
+        toast.success(pinnedIds.includes(id) ? "Unpinned project" : "Pinned project to top");
+    };
+
+    const sortedRequests = useMemo(() => {
+        return [...allRequests].sort((a, b) => {
+            const aPinned = pinnedIds.includes(a.id);
+            const bPinned = pinnedIds.includes(b.id);
+            if (aPinned && !bPinned) return -1;
+            if (!aPinned && bPinned) return 1;
+            return b.sortKey - a.sortKey;
+        });
+    }, [allRequests, pinnedIds]);
 
     const filteredRequests = useMemo(() => {
-        return allRequests.filter(req => {
-            const matchesSearch = (req.projectName?.toLowerCase() || "").includes(searchTerm.toLowerCase()) || 
+        return sortedRequests.filter(req => {
+            const nameToSearch = (req.projectName || req.client || req.company_name || "").toLowerCase();
+            const matchesSearch = nameToSearch.includes(searchTerm.toLowerCase()) || 
                                  (req.shortId || "").toLowerCase().includes(searchTerm.toLowerCase());
             
             if (filterCategory === "unread") return matchesSearch && req.unreadCount > 0;
@@ -131,13 +274,14 @@ function MessagesContent() {
     const activeCategory = COLLECTIONS.find(c => c.id === activeData?.sourceCollection);
 
     return (
-        <div className="flex h-[calc(100vh-64px)] w-full overflow-hidden bg-white">
-            {/* Sidebar List */}
+        <div className="flex flex-1 w-full overflow-hidden bg-white h-[calc(100vh-4rem)] isolate">
+            {/* Sidebar List - Independent scroll container */}
             <aside className={cn(
-                "w-full md:w-[380px] lg:w-[420px] border-r border-slate-100 flex flex-col shrink-0 bg-[#F9FAFB] transition-all duration-300",
+                "w-full md:w-[320px] lg:w-[360px] border-r border-slate-200 flex flex-col shrink-0 bg-[#F9FAFB] transition-all duration-300 h-full overflow-hidden",
                 selectedRequest ? "hidden md:flex" : "flex"
             )}>
-                <div className="p-5 pb-3 space-y-4">
+                {/* Fixed Header - not sticky, just shrink-0 */}
+                <div className="p-4 pb-3 space-y-3 shrink-0 bg-[#F9FAFB] z-20 border-b border-slate-100/50">
                     <div className="flex items-center justify-between">
                         <div>
                             <h2 className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Collaboration Clusters</h2>
@@ -163,7 +307,11 @@ function MessagesContent() {
                         />
                     </div>
 
-                    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+                </div>
+
+                {/* Scrollable Cluster Filters - Separate from project list */}
+                <div className="shrink-0 bg-[#F9FAFB] border-b border-slate-100/50 px-4 py-2">
+                    <div className="flex gap-2 overflow-x-auto scrollbar-thin pb-1">
                         <button
                             onClick={() => setFilterCategory("all")}
                             className={cn(
@@ -199,55 +347,35 @@ function MessagesContent() {
                     </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto no-scrollbar px-3 pb-6 space-y-1">
+                {/* Scrollable Project List - Separate from cluster filters */}
+                <div className="flex-1 overflow-y-auto px-0 pb-0" style={{ maxHeight: 'calc(100vh - 280px)' }}>
                     {filteredRequests.length > 0 ? filteredRequests.map((req) => {
                         const isActive = selectedRequest?.id === req.id;
                         const category = COLLECTIONS.find(c => c.id === req.sourceCollection);
                         const lastMsg = req.messages?.[req.messages.length - 1];
+                        const statusInfo = getStatusInfo(req.status);
+                        const isPinned = pinnedIds.includes(req.id);
                         
-                        return (
-                            <button 
+                        return ( 
+                            <ChatMessageListItem
                                 key={req.id}
-                                onClick={() => setSelectedRequest({id: req.id, coll: req.sourceCollection})}
-                                className={cn(
-                                    "w-full p-4 flex items-center gap-4 rounded-[24px] transition-all relative group mb-1",
-                                    isActive ? "bg-blue-600 text-white shadow-xl shadow-blue-100 z-10" : "hover:bg-white text-slate-900"
-                                )}
-                            >
-                                <div className={cn(
-                                    "size-12 rounded-[16px] flex items-center justify-center shrink-0 transition-transform group-hover:scale-105",
-                                    isActive ? "bg-white/20 backdrop-blur-md" : (category?.bg || "bg-slate-100")
-                                )}>
-                                    {category ? <category.icon size={20} className={isActive ? "text-white" : category.color} /> : <Hash size={18} />}
-                                </div>
-                                
-                                <div className="flex-1 min-w-0 text-left">
-                                    <div className="flex justify-between items-center mb-1">
-                                        <h4 className="text-[13px] font-black truncate uppercase tracking-tight leading-none">
-                                            {req.projectName || "Untitled Project"}
-                                        </h4>
-                                        <span className={cn("text-[9px] font-bold shrink-0 ml-2", isActive ? "text-blue-200" : "text-slate-400")}>
-                                            {formatRelativeTime(req.lastUpdated)}
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-2 mb-1.5">
-                                        {req.unreadCount > 0 && !isActive && (
-                                            <div className="h-2 w-2 rounded-full bg-blue-600 animate-pulse" />
-                                        )}
-                                        <span className={cn("text-[9px] font-bold font-mono px-2 py-0.5 rounded-md", isActive ? "bg-black/20 text-blue-100" : "bg-slate-100 text-slate-500")}>
-                                            #{req.shortId}
-                                        </span>
-                                    </div>
-                                    <p className={cn("text-[11px] truncate font-medium", isActive ? "text-blue-50 opacity-90" : "text-slate-500")}>
-                                        {lastMsg ? (
-                                            <span className="flex items-center gap-1">
-                                                <span className="font-bold shrink-0 uppercase text-[9px]">{lastMsg.senderName.split(' ')[0]}:</span>
-                                                <span className="truncate">"{lastMsg.text}"</span>
-                                            </span>
-                                        ) : "No activity recorded"}
-                                    </p>
-                                </div>
-                            </button>
+                                id={req.id}
+                                shortId={req.shortId}
+                                sourceCollection={req.sourceCollection}
+                                unreadCount={req.unreadCount}
+                                lastUpdated={req.lastUpdated}
+                                projectName={req.projectName}
+                                client={req.client}
+                                company_name={req.company_name}
+                                status={req.status}
+                                messages={req.messages}
+                                isActive={isActive}
+                                isPinned={isPinned}
+                                category={category}
+                                onSelect={(id, coll) => setSelectedRequest({ id, coll })}
+                                onTogglePin={togglePin}
+                                userId={userId || ""}
+                            />
                         );
                     }) : (
                         <div className="flex flex-col items-center justify-center py-20 opacity-30">
@@ -258,49 +386,47 @@ function MessagesContent() {
                 </div>
             </aside>
 
-            {/* Chat Content */}
-            <main className={cn("flex-1 relative bg-white", !selectedRequest ? "hidden md:flex" : "flex")}>
-                {selectedRequest && activeData ? (
-                    <div className="flex flex-col w-full h-full animate-in slide-in-from-right-4 duration-300">
-                        
-                        {/* ADAPTIVE HEADER */}
-                        <header className="flex flex-col border-b border-slate-100 bg-white/80 backdrop-blur-md z-20">
-                            <div className="px-4 md:px-8 py-4 flex items-center justify-between">
-                                <div className="flex items-center gap-4 min-w-0">
-                                    <button 
-                                        onClick={() => setSelectedRequest(null)} 
-                                        className="md:hidden p-2.5 bg-slate-100 rounded-xl active:scale-95 transition-transform"
-                                    >
-                                        <ChevronLeft size={20}/>
-                                    </button>
-                                    
-                                    <div className="min-w-0">
-                                        <div className="flex items-center gap-2">
-                                            <h3 className="text-sm md:text-base font-black uppercase tracking-tight truncate text-slate-900">
-                                                {activeData.projectName}
-                                            </h3>
-                                            <span className="hidden sm:inline-block px-2 py-0.5 bg-blue-50 text-blue-600 text-[9px] font-black rounded-md border border-blue-100">
-                                                V4.0
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center gap-3 mt-0.5">
-                                            <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">#{activeData.shortId}</p>
-                                            <div className="size-1 rounded-full bg-slate-300" />
-                                            <span className={cn(
-                                                "text-[9px] font-black uppercase px-2 py-0.5 rounded-full",
-                                                activeData.status === "COMPLETED" ? "bg-green-50 text-green-600" : "bg-amber-50 text-amber-600"
-                                            )}>
-                                                {activeData.status}
-                                            </span>
-                                        </div>
+            {/* Main Chat Area - Takes remaining space */}
+            <main className={cn(
+                "flex-1 flex flex-col min-w-0 bg-white relative overflow-hidden h-full",
+                !selectedRequest ? "hidden md:flex" : "flex"
+            )}>
+                {/* Sticky Chat Header */}
+                <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-sm border-b border-slate-200 shadow-sm">
+                    {selectedRequest && activeData ? (
+                        <div className="p-4">
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-3">
+                                    <div className="flex -space-x-2">
+                                        {[activeData.client, activeData.company_name].filter(Boolean).slice(0, 3).map((name, i) => (
+                                            <Avatar key={i} className="size-8 border-2 border-white">
+                                                <AvatarFallback className="bg-blue-100 text-blue-600 text-[10px] font-bold">
+                                                    {(name || "U").charAt(0).toUpperCase()}
+                                                </AvatarFallback>
+                                            </Avatar>
+                                        ))}
+                                        {activeData.messages?.length > 4 && (
+                                            <div className="size-8 rounded-full border-2 border-white bg-slate-900 flex items-center justify-center text-[8px] font-black text-white">
+                                                +{activeData.messages.length - 4}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <h3 className="font-bold text-slate-900 text-sm">
+                                            {activeData.projectName || activeData.client || activeData.company_name || "dsiconnect"}
+                                        </h3>
+                                        <p className="text-[11px] text-slate-500">
+                                            {activeCategory?.label} • {activeData.status}
+                                        </p>
                                     </div>
                                 </div>
-
-                                <div className="flex items-center gap-3">
-                                    <div className="hidden lg:flex flex-col items-end mr-4">
-                                        <span className="text-[8px] font-black text-slate-400 uppercase">Last Interaction</span>
-                                        <span className="text-[10px] font-bold text-slate-700">{formatRelativeTime(activeData.lastUpdated)}</span>
-                                    </div>
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        onClick={() => setIsSearching(!isSearching)}
+                                        className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"
+                                    >
+                                        <Search size={18} />
+                                    </button>
                                     <Link 
                                         href={getProjectLink(activeData.sourceCollection, activeData.id)}
                                         className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-[10px] font-black uppercase hover:bg-blue-600 transition-all shadow-lg shadow-slate-200"
@@ -310,86 +436,94 @@ function MessagesContent() {
                                     </Link>
                                 </div>
                             </div>
+                            {isSearching && (
+                                <input
+                                    autoFocus
+                                    className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-700 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                    placeholder="Search messages..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                />
+                            )}
+                        </div>
+                    ) : null}
+                </div>
 
-                            {/* Secondary Metadata Bar (Desktop) */}
-                            <div className="hidden md:flex px-8 py-2.5 bg-slate-50/50 border-t border-slate-100 items-center justify-between">
-                                <div className="flex items-center gap-6">
-                                    <div className="flex items-center gap-2">
-                                        <div className="p-1.5 bg-white rounded-lg shadow-sm">
-                                            {activeCategory && <activeCategory.icon size={12} className={activeCategory.color} />}
+                {/* Chat Content - Scrollable area */}
+                <div className="flex-1 flex flex-col bg-[#FDFEFF] min-h-0 overflow-hidden">
+                    {selectedRequest && activeData ? (
+                        <ChatConversation 
+                            requestId={selectedRequest.id}
+                            collectionName={selectedRequest.coll}
+                            messages={activeData.messages || []}
+                            currentUserId={userId || ""}
+                            userName={`${userData?.Firstname || ''} ${userData?.Lastname || ''}`}
+                            userRole={userData?.Position || "Staff"}
+                            status={activeData.status || "PENDING"}
+                            profilePicture={userData?.Image}
+                            title={activeData.projectName || activeData.client || activeData.company_name || "dsiconnect"}
+                            searchQuery={searchQuery}
+                        />
+                    ) : (
+                        <div className="hidden md:flex flex-col items-center justify-center w-full h-full bg-[#FCFDFF] p-12 text-center">
+                            <div className="max-w-md w-full text-center">
+                                <div className="relative mb-8 inline-block">
+                                    <div className="absolute inset-0 bg-blue-500/10 blur-3xl rounded-full" />
+                                    <div className="relative w-24 h-24 bg-white rounded-[32px] shadow-2xl flex items-center justify-center mx-auto border border-slate-50">
+                                        <MessageSquare size={40} className="text-blue-600" />
+                                        <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-amber-400 rounded-xl flex items-center justify-center shadow-lg border-2 border-white animate-bounce">
+                                            <Sparkles size={16} className="text-white" />
                                         </div>
-                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">{activeCategory?.label} Cluster</span>
-                                    </div>
-                                    <div className="h-4 w-px bg-slate-200" />
-                                    <div className="flex items-center gap-2">
-                                        <Activity size={12} className="text-blue-500" />
-                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">{activeData.messages?.length || 0} Total Actions</span>
                                     </div>
                                 </div>
                                 
-                                <div className="flex -space-x-2">
-                                    {activeData.messages?.slice(-4).map((m: any, i: number) => (
-                                        <div key={i} className="size-6 rounded-full border-2 border-white bg-slate-200 overflow-hidden ring-1 ring-slate-100">
-                                            <img 
-                                                src={m.senderImage || `https://api.dicebear.com/7.x/initials/svg?seed=${m.senderName}`} 
-                                                className="object-cover size-full" 
-                                                alt="participant" 
-                                            />
+                                <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight mb-3">
+                                    DSIConnect Hub
+                                </h2>
+                                <p className="text-slate-500 text-sm font-medium mb-10 leading-relaxed px-6">
+                                    Your centralized collaboration space. Select a project cluster from the sidebar to view detailed history and internal communication.
+                                </p>
+
+                                <div className="grid grid-cols-2 gap-3 max-w-sm mx-auto">
+                                    {COLLECTIONS.map(coll => (
+                                        <div 
+                                            key={coll.id}
+                                            className="p-4 rounded-[24px] bg-white border border-slate-100 shadow-sm hover:shadow-md transition-all group cursor-pointer text-left"
+                                        >
+                                            <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform", coll.bg, coll.color)}>
+                                                <coll.icon size={20} strokeWidth={2.5} />
+                                            </div>
+                                            <div className="font-black text-[10px] text-slate-400 uppercase tracking-wider mb-1">
+                                                Cluster
+                                            </div>
+                                            <div className="font-bold text-[13px] text-slate-900 uppercase tracking-tight">
+                                                {coll.label}
+                                            </div>
                                         </div>
                                     ))}
-                                    {activeData.messages?.length > 4 && (
-                                        <div className="size-6 rounded-full border-2 border-white bg-slate-900 flex items-center justify-center text-[7px] font-black text-white">
-                                            +{activeData.messages.length - 4}
-                                        </div>
-                                    )}
                                 </div>
-                            </div>
-                        </header>
 
-                        <div className="flex-1 relative overflow-hidden bg-[#FDFEFF]">
-                            <CollaborationHub 
-                                key={selectedRequest.id}
-                                requestId={selectedRequest.id}
-                                collectionName={selectedRequest.coll}
-                                messages={activeData.messages || []}
-                                currentUserId={userId || ""}
-                                userName={`${userData?.Firstname || ''} ${userData?.Lastname || ''}`}
-                                userRole={userData?.Position || "Staff"}
-                                status={activeData.status || "PENDING"}
-                                profilePicture={userData?.Image}
-                                title={activeData.projectName || "dsiconnect"}
-                            />
-                        </div>
-                    </div>
-                ) : (
-                    <div className="hidden md:flex flex-col items-center justify-center w-full bg-[#FCFDFF] p-12 text-center">
-                        <div className="relative mb-8">
-                            <div className="absolute -inset-10 bg-blue-50 rounded-full blur-3xl animate-pulse" />
-                            <div className="relative size-28 bg-white rounded-[40px] shadow-2xl shadow-blue-100 flex items-center justify-center border border-slate-50 rotate-3">
-                                <MessageSquare size={40} className="text-blue-600" />
-                            </div>
-                            <div className="absolute -bottom-2 -right-2 size-10 bg-white rounded-2xl shadow-lg flex items-center justify-center border border-slate-50 -rotate-12">
-                                <Sparkles size={18} className="text-amber-500" />
-                            </div>
-                        </div>
-                        <h3 className="text-[12px] font-black text-slate-900 uppercase tracking-[0.4em] mb-3">DSIConnect Hub</h3>
-                        <p className="text-[11px] font-bold text-slate-400 uppercase max-w-[280px] leading-relaxed">
-                            Select a project cluster from the sidebar to begin internal collaboration
-                        </p>
-                        
-                        <div className="grid grid-cols-2 gap-3 mt-12 opacity-50">
-                            {COLLECTIONS.slice(0, 4).map(c => (
-                                <div key={c.id} className="flex items-center gap-2 px-4 py-2 bg-white rounded-xl border border-slate-100 shadow-sm">
-                                    <c.icon size={12} className={c.color} />
-                                    <span className="text-[9px] font-black uppercase">{c.label.split(' ')[0]}</span>
+                                <div className="mt-12 flex items-center justify-center gap-6">
+                                    <div className="text-center">
+                                        <div className="text-xl font-black text-slate-900">{allRequests.length}</div>
+                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active Projects</div>
+                                    </div>
+                                    <div className="w-px h-8 bg-slate-100" />
+                                    <div className="text-center">
+                                        <div className="text-xl font-black text-blue-600">
+                                            {allRequests.reduce((acc, r) => acc + (r.unreadCount || 0), 0)}
+                                        </div>
+                                        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Unread Messages</div>
+                                    </div>
                                 </div>
-                            ))}
+                            </div>
                         </div>
-                    </div>
-                )}
+                    )}
+                </div>
             </main>
         </div>
     );
+
 }
 
 export default function InternalMessagesPage() {
@@ -400,7 +534,7 @@ export default function InternalMessagesPage() {
         <ProtectedPageWrapper>
             <SidebarProvider defaultOpen={false}>
                 <AppSidebar userId={userId} />
-                <SidebarInset className="bg-white min-h-screen">
+                <SidebarInset className="bg-white flex-1 flex flex-col overflow-hidden">
                     <PageHeader 
                         title="Project Workspace" 
                         version="V4.0" 
@@ -426,6 +560,20 @@ export default function InternalMessagesPage() {
             <style jsx global>{`
                 .no-scrollbar::-webkit-scrollbar { display: none; }
                 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+                
+                /* Nice slim scrollbar styling */
+                ::-webkit-scrollbar { width: 6px; height: 6px; }
+                ::-webkit-scrollbar-track { background: transparent; }
+                ::-webkit-scrollbar-thumb { 
+                    background: #cbd5e1; 
+                    border-radius: 3px; 
+                    transition: background 0.2s;
+                }
+                ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+                ::-webkit-scrollbar-corner { background: transparent; }
+                
+                /* Firefox scrollbar */
+                * { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
             `}</style>
         </ProtectedPageWrapper>
     );

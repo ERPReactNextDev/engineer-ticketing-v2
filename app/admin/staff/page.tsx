@@ -67,14 +67,32 @@ import {
 } from "@/components/ui/alert-dialog"
 
 const ITEMS_PER_PAGE = 10
-const ROLE_OPTIONS = ["SUPER ADMIN", "MANAGER", "LEADER", "MEMBER"]
+
+// Standard roles for most departments
+const STANDARD_ROLES = ["SUPER ADMIN", "MANAGER", "LEADER", "MEMBER"]
+
+// Sales-specific roles for Sales department hierarchy
+const SALES_ROLES = ["SUPER ADMIN", "SALES HEAD", "TERRITORY SALES MANAGER", "TERRITORY SALES ASSOCIATE"]
+
+// Get roles based on department
+const getRolesForDepartment = (dept?: string): string[] => {
+    if (!dept) return STANDARD_ROLES
+    if (dept.toUpperCase() === "SALES") return SALES_ROLES
+    return STANDARD_ROLES
+}
+
+const ROLE_OPTIONS = getRolesForDepartment()
+
 type SortField = "name" | "department" | "role" | "status" | "activity"
 type SortDir = "asc" | "desc"
 
 const roleRank: Record<string, number> = {
-    "SUPER ADMIN": 4,
-    "MANAGER": 3,
+    "SUPER ADMIN": 5,
+    "SALES HEAD": 4,
+    "MANAGER": 4,
+    "TERRITORY SALES MANAGER": 3,
     "LEADER": 2,
+    "TERRITORY SALES ASSOCIATE": 1,
     "MEMBER": 1,
 }
 
@@ -186,6 +204,13 @@ export default function StaffDirectoryPage() {
     const [isProcessing, setIsProcessing] = React.useState(false)
     const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
     const [batchRole, setBatchRole] = React.useState<string>("MEMBER")
+    
+    // Get available roles for batch operations (uses first department with staff, or standard roles)
+    const batchRoleOptions = React.useMemo(() => {
+        // For batch operations, use standard roles as default
+        // The actual department-specific roles will be determined when individual staff is selected
+        return STANDARD_ROLES
+    }, [])
     const [showGuide, setShowGuide] = React.useState(false)
 
     const activeRole = pendingRole || selectedStaff?.Role?.toUpperCase() || "MEMBER"
@@ -667,7 +692,7 @@ export default function StaffDirectoryPage() {
                                                     </Button>
                                                 </DropdownMenuTrigger>
                                                 <DropdownMenuContent className="rounded-xl border-zinc-100 min-w-[140px]">
-                                                    {ROLE_OPTIONS.map(r => (
+                                                    {batchRoleOptions.map(r => (
                                                         <DropdownMenuItem 
                                                             key={r} 
                                                             onClick={() => { setBatchRole(r); setConfirmType("BATCH_ROLE"); }}
@@ -888,9 +913,11 @@ export default function StaffDirectoryPage() {
                                                         <div className={cn(
                                                             "flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-colors",
                                                             role === "SUPER ADMIN" ? "bg-zinc-900 text-white border-zinc-900" :
-                                                                role === "MANAGER" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                                                role === "MANAGER" || role === "SALES HEAD" ? "bg-blue-50 text-blue-700 border-blue-200" :
                                                                     role === "LEADER" ? "bg-violet-50 text-violet-700 border-violet-200" :
-                                                                        "bg-zinc-100 text-zinc-600 border-zinc-200"
+                                                                        role === "TERRITORY SALES MANAGER" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                                                            role === "TERRITORY SALES ASSOCIATE" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                                                                                "bg-zinc-100 text-zinc-600 border-zinc-200"
                                                         )}>
                                                             <Key className={cn("size-2.5", role === "SUPER ADMIN" ? "text-zinc-400" : "text-current opacity-70")} />
                                                             <span className="text-[9px] font-black uppercase tracking-wider">
@@ -964,9 +991,11 @@ export default function StaffDirectoryPage() {
                                                             <span className={cn(
                                                                 "text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md border",
                                                                 role === "SUPER ADMIN" ? "bg-zinc-900 text-white border-zinc-900" :
-                                                                    role === "MANAGER" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                                                    role === "MANAGER" || role === "SALES HEAD" ? "bg-blue-50 text-blue-700 border-blue-200" :
                                                                         role === "LEADER" ? "bg-violet-50 text-violet-700 border-violet-200" :
-                                                                            "bg-zinc-100 text-zinc-600 border-zinc-200"
+                                                                            role === "TERRITORY SALES MANAGER" ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                                                                role === "TERRITORY SALES ASSOCIATE" ? "bg-orange-50 text-orange-700 border-orange-200" :
+                                                                                    "bg-zinc-100 text-zinc-600 border-zinc-200"
                                                             )}>
                                                                 {role}
                                                             </span>
@@ -1131,7 +1160,7 @@ export default function StaffDirectoryPage() {
                                                             <SelectValue />
                                                         </SelectTrigger>
                                                         <SelectContent className="rounded-2xl border-zinc-100">
-                                                            {ROLE_OPTIONS.map(r => (
+                                                            {getRolesForDepartment(selectedStaff?.Department).map(r => (
                                                                 <SelectItem key={r} value={r} className="font-bold text-[10px] uppercase py-3">{r}</SelectItem>
                                                             ))}
                                                         </SelectContent>

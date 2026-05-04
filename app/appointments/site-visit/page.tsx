@@ -16,12 +16,17 @@ import {
   User, Building2, MapPin, ClipboardList, Info, Sparkles,
   ChevronLeft, ChevronDown, ListFilter, CalendarDays,
   Target, TrendingUp, AlertCircle, CheckCircle, BarChart3,
-  HelpCircle, Lightbulb, Bell, ListChecks, Users
+  HelpCircle, Lightbulb, Bell, ListChecks, Users, ChevronUp
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { 
   format, 
@@ -47,26 +52,30 @@ import {
 
 // FIREBASE
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot, query, orderBy, where, getDoc, doc } from "firebase/firestore"
+import { collection, onSnapshot, query, orderBy, where, getDoc, getDocs, doc } from "firebase/firestore"
 
 // CUSTOM COMPONENTS
 import { PageHeader } from "@/components/page-header"
 import { SiteVisitCounterAdmin } from "@/components/site-visit-counter-admin"
+import { SLATracker } from "@/components/sla-tracker"
+import { WorkloadBalancer } from "@/components/workload-balancer"
+import { TeamPerformance } from "@/components/team-performance"
+import { QuickActions } from "@/components/quick-actions"
 
 /* ─────────────────────────────────────────────
    CONSTANTS
 ───────────────────────────────────────────── */
 const STATUS_META: Record<string, { label: string; color: string; bg: string; border: string; dot: string }> = {
   PENDING: {
-    label: "Pending Engagement",
+    label: "Pending Request",
     color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200", dot: "bg-amber-400",
   },
   CONFIRMED: {
-    label: "Confirmed Visit",
+    label: "Request Completed",
     color: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200", dot: "bg-blue-500",
   },
   COMPLETED: {
-    label: "Visit Completed",
+    label: "Request Acknowledge",
     color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", dot: "bg-emerald-500",
   },
 }
@@ -352,45 +361,45 @@ function RoleInsights({ user, visits, staffNames, setShowGuide, subordinateIds }
     : 0
 
   return (
-    <section className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+    <section className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
       {/* Dynamic Widget 1: Personal Agenda / Team Pipeline */}
-      <div className="bg-white rounded-2xl p-4 border border-zinc-200/60 shadow-sm flex items-center justify-between group overflow-hidden relative">
-        <div className="flex items-center gap-3">
-          <div className="size-9 bg-zinc-900 rounded-xl flex items-center justify-center text-white shadow-lg shadow-zinc-200 flex-shrink-0">
-            {isSales ? <TrendingUp size={18} /> : <Target size={18} />}
+      <div className="bg-white rounded-xl p-3 border border-zinc-200/60 shadow-sm flex items-center justify-between group overflow-hidden relative">
+        <div className="flex items-center gap-2.5">
+          <div className="size-8 bg-zinc-900 rounded-lg flex items-center justify-center text-white shadow-sm flex-shrink-0">
+            {isSales ? <TrendingUp size={16} /> : <Target size={16} />}
           </div>
           <div>
-            <h4 className="text-[11px] font-black text-zinc-900 uppercase tracking-tight leading-none">
+            <h4 className="text-[10px] font-black text-zinc-900 uppercase tracking-tight leading-none">
               {hasSubordinates ? "Team Pipeline" : (isSales ? "Sales Pipeline" : "Work Agenda")}
             </h4>
-            <div className="flex items-baseline gap-1.5 mt-1">
-              <span className="text-lg font-black text-zinc-900 leading-none">
+            <div className="flex items-baseline gap-1.5 mt-0.5">
+              <span className="text-base font-black text-zinc-900 leading-none">
                 {hasSubordinates ? teamPending.length + myPending.length : (isSales ? myPending.length : next48Hours.length)}
               </span>
               <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest">Active</span>
             </div>
           </div>
         </div>
-        <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-tighter text-right leading-tight max-w-[80px]">
-          {hasSubordinates ? "Total team pending" : (isSales ? "Pending feedback" : "Next 48h schedule")}
+        <p className="text-[8px] font-bold text-zinc-400 uppercase tracking-tighter text-right leading-tight max-w-[70px]">
+          {hasSubordinates ? "Team pending" : (isSales ? "Pending" : "Next 48h")}
         </p>
       </div>
 
       {/* Dynamic Widget 2: Operational Health - Compact */}
-      <div className="bg-white rounded-2xl p-4 border border-zinc-200/60 shadow-sm flex items-center justify-between group">
-        <div className="flex items-center gap-3 flex-1">
-          <div className="size-9 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600 border border-emerald-100 flex-shrink-0">
-            <CheckCircle size={18} />
+      <div className="bg-white rounded-xl p-3 border border-zinc-200/60 shadow-sm flex items-center justify-between group">
+        <div className="flex items-center gap-2.5 flex-1">
+          <div className="size-8 bg-emerald-50 rounded-lg flex items-center justify-center text-emerald-600 border border-emerald-100 flex-shrink-0">
+            <CheckCircle size={16} />
           </div>
-          <div className="flex-1 pr-4">
-            <h4 className="text-[11px] font-black text-zinc-900 uppercase tracking-tight leading-none">
+          <div className="flex-1 pr-2">
+            <h4 className="text-[10px] font-black text-zinc-900 uppercase tracking-tight leading-none">
               {hasSubordinates ? "Team Closure" : "Closure Rate"}
             </h4>
-            <div className="flex items-center gap-2 mt-2">
+            <div className="flex items-center gap-2 mt-1.5">
               <div className="flex-1 h-1.5 bg-zinc-50 rounded-full overflow-hidden">
                 <div className="h-full bg-emerald-500 rounded-full transition-all duration-1000" style={{ width: `${completionRate}%` }} />
               </div>
-              <span className="text-[11px] font-black text-emerald-600">{completionRate.toFixed(0)}%</span>
+              <span className="text-[10px] font-black text-emerald-600">{completionRate.toFixed(0)}%</span>
             </div>
           </div>
         </div>
@@ -398,28 +407,28 @@ function RoleInsights({ user, visits, staffNames, setShowGuide, subordinateIds }
 
       {/* Dynamic Widget 3: Personnel Load or Quick Tips */}
       {(isManager || isTSM || isIT) ? (
-        <div className="bg-zinc-900 rounded-2xl p-4 border border-zinc-800 shadow-sm flex items-center justify-between text-white">
-          <div className="flex items-center gap-3">
-            <div className="size-9 bg-white/10 rounded-xl flex items-center justify-center text-white flex-shrink-0">
-              {hasSubordinates ? <Users size={18} /> : <BarChart3 size={18} />}
+        <div className="bg-zinc-900 rounded-xl p-3 border border-zinc-800 shadow-sm flex items-center justify-between text-white">
+          <div className="flex items-center gap-2.5">
+            <div className="size-8 bg-white/10 rounded-lg flex items-center justify-center text-white flex-shrink-0">
+              {hasSubordinates ? <Users size={16} /> : <BarChart3 size={16} />}
             </div>
             <div>
-              <h4 className="text-[11px] font-black uppercase tracking-tight leading-none">
+              <h4 className="text-[10px] font-black uppercase tracking-tight leading-none">
                 {hasSubordinates ? "Team Capacity" : "Active Load"}
               </h4>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-lg font-black leading-none">
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-base font-black leading-none">
                   {hasSubordinates ? subordinateIds.length : Object.keys(staffNames).length}
                 </span>
                 <span className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">
-                  {hasSubordinates ? "Subordinates" : "Tracked PICs"}
+                  {hasSubordinates ? "Members" : "PICs"}
                 </span>
               </div>
             </div>
           </div>
           <div className="flex items-center -space-x-2">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="size-6 rounded-full border-2 border-zinc-900 bg-zinc-800 flex items-center justify-center text-[8px] font-black text-zinc-500">
+            {[...Array(2)].map((_, i) => (
+              <div key={i} className="size-5 rounded-full border-2 border-zinc-900 bg-zinc-800 flex items-center justify-center text-[7px] font-black text-zinc-500">
                 {String.fromCharCode(65 + i)}
               </div>
             ))}
@@ -428,19 +437,19 @@ function RoleInsights({ user, visits, staffNames, setShowGuide, subordinateIds }
       ) : (
         <div 
           onClick={() => setShowGuide(true)}
-          className="bg-white rounded-2xl p-4 border border-zinc-200/60 shadow-sm flex items-center gap-3 cursor-pointer hover:bg-zinc-50 transition-all group"
+          className="bg-white rounded-xl p-3 border border-zinc-200/60 shadow-sm flex items-center gap-2.5 cursor-pointer hover:bg-zinc-50 transition-all group"
         >
-          <div className="size-9 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600 border border-blue-100 flex-shrink-0 group-hover:scale-110 transition-transform">
-            <HelpCircle size={18} />
+          <div className="size-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-600 border border-blue-100 flex-shrink-0 group-hover:scale-110 transition-transform">
+            <HelpCircle size={16} />
           </div>
           <div>
-            <h4 className="text-[11px] font-black text-zinc-900 uppercase tracking-tight leading-none">Need Help?</h4>
-            <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-1.5 leading-tight">
-              Click to see our simple guide
+            <h4 className="text-[10px] font-black text-zinc-900 uppercase tracking-tight leading-none">Need Help?</h4>
+            <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-0.5 leading-tight">
+              Click for guide
             </p>
           </div>
           <div className="ml-auto">
-            <ChevronRight size={14} className="text-zinc-300 group-hover:text-zinc-900 transition-colors" />
+            <ChevronRight size={12} className="text-zinc-300 group-hover:text-zinc-900 transition-colors" />
           </div>
         </div>
       )}
@@ -459,18 +468,46 @@ export default function SiteVisitListPage() {
   const [isUserLoading, setIsUserLoading] = React.useState(true)
   const [visits, setVisits] = React.useState<any[]>([])
   const [subordinateIds, setSubordinateIds] = React.useState<string[]>([])
-  const [subordinateDetails, setSubordinateDetails] = React.useState<{id: string, name: string}[]>([])
+  const [subordinateDetails, setSubordinateDetails] = React.useState<{id: string, name: string, role: string}[]>([])
   const [selectedMemberId, setSelectedMemberId] = React.useState<string | null>(null)
   const [isDataLoading, setIsDataLoading] = React.useState(true)
   const [selectedStatus, setSelectedStatus] = React.useState<string | null>(null)
   const [searchQuery, setSearchQuery] = React.useState("")
   const [staffNames, setStaffNames] = React.useState<Record<string, string>>({})
+  const [allStaff, setAllStaff] = React.useState<any[]>([])
+  const [allProtocols, setAllProtocols] = React.useState<Record<string, string>>({})
+  
+  // Helper to resolve protocol ID to name
+  const resolveProtocolNames = React.useCallback((protocolIds: string[] | string): string => {
+    if (!protocolIds) return "Standard Engagement"
+    const ids = Array.isArray(protocolIds) ? protocolIds : [protocolIds]
+    const names = ids.map(id => allProtocols[id] || id)
+    return names.join(" + ") || "Standard Engagement"
+  }, [allProtocols])
+  
+  // Helper to resolve user name from ID (handles both MongoDB _id and ReferenceID)
+  const resolveUserName = React.useCallback((userId: string): string => {
+    if (!userId) return "—"
+    // Check staffNames first (PIC names)
+    if (staffNames[userId]) return staffNames[userId]
+    // Check subordinate details
+    const subordinate = subordinateDetails.find(s => s.id === userId)
+    if (subordinate) return subordinate.name
+    // Check all staff from MongoDB by _id
+    const staffById = allStaff.find(s => s._id === userId)
+    if (staffById) return `${staffById.Firstname || ""} ${staffById.Lastname || ""}`.trim()
+    // Check all staff by ReferenceID (for TSM/Manager fields)
+    const staffByRef = allStaff.find(s => s.ReferenceID === userId)
+    if (staffByRef) return `${staffByRef.Firstname || ""} ${staffByRef.Lastname || ""}`.trim()
+    return userId.slice(0, 8) + "..." // Fallback to truncated ID
+  }, [staffNames, subordinateDetails, allStaff])
   
   // New Productivity States
   const [view, setView] = React.useState<"list" | "calendar">("list")
   const [currentPage, setCurrentPage] = React.useState(1)
   const [currentMonth, setCurrentMonth] = React.useState(new Date())
   const [showGuide, setShowGuide] = React.useState(false)
+  const [showManagementDashboard, setShowManagementDashboard] = React.useState(false)
   const PAGE_SIZE = 10
 
   // 1. IDENTITY & DEPARTMENT RETRIEVAL
@@ -490,10 +527,32 @@ export default function SiteVisitListPage() {
         const name = `${data.Firstname || ""} ${data.Lastname || ""}`.trim()
         const referenceId = (data.ReferenceID || "").toUpperCase()
         
-        // Robust Role Detection
-        const isTSM = firestoreRole === "TSM" || firestoreRole === "TERRITORY SALES MANAGER" || (data.Position || "").toUpperCase().includes("TSM") || (data.Position || "").toUpperCase().includes("TERRITORY SALES MANAGER")
-        const isManager = firestoreRole === "MANAGER" || firestoreRole === "SALES HEAD" || (data.Position || "").toUpperCase().includes("MANAGER") || (data.Position || "").toUpperCase().includes("SALES HEAD")
-        const finalRole = isManager ? "MANAGER" : (isTSM ? "TSM" : firestoreRole)
+        /**
+         * ROLE DETECTION STRATEGY:
+         * - For SALES dept: Use MongoDB Position as primary (supports TSM/TSA hierarchy)
+         * - For other depts: Use Firebase Role as primary (IT, Engineering, etc.)
+         * - Fallback to Firebase Role if Position is empty/generic
+         */
+        const dept = (data.Department || "").toUpperCase()
+        const position = (data.Position || "").toUpperCase()
+        const isSalesDept = dept === "SALES"
+        
+        // Sales-specific role detection based on Position
+        const isTSM = isSalesDept 
+            ? (position.includes("TERRITORY SALES MANAGER") && !position.includes("ASSOCIATE"))
+            : (firestoreRole === "TSM" || firestoreRole === "TERRITORY SALES MANAGER")
+        
+        const isTSA = isSalesDept && position.includes("TERRITORY SALES ASSOCIATE")
+        
+        const isManager = isSalesDept
+            ? (position.includes("SALES HEAD") || position.includes("MANAGER"))
+            : (firestoreRole === "MANAGER" || firestoreRole === "SALES HEAD")
+        
+        // Determine final role priority: Manager > TSM > TSA > Firestore Role
+        let finalRole = firestoreRole
+        if (isManager) finalRole = "MANAGER"
+        else if (isTSM) finalRole = "TSM"
+        else if (isTSA) finalRole = "TSA"
 
         setUser({ 
           id: storedId, 
@@ -513,30 +572,51 @@ export default function SiteVisitListPage() {
           const myCleanName = clean(name)
 
           if (isTSM) {
-            // TSM sees all TSAs where TSM field matches their name OR ReferenceID
+            // TSM can only see TSAs (MEMBER role) that have THIS TSM assigned
+            // Exclude other TSMs and users with empty TSM field
             subs = allUsers.filter(u => {
+              // Skip if this user is also a TSM (prevent cross-visibility)
+              const uRole = (u.Role || u.role || "MEMBER").toUpperCase()
+              const uPosition = (u.Position || "").toUpperCase()
+              if (uRole === "TSM" || uPosition.includes("TERRITORY SALES MANAGER")) return false
+
+              // Check if this user has the current TSM assigned to them
               const uTSM = clean(u.TSM)
               const uTSMName = clean(u.TSMName)
               const uTSM_low = clean(u.tsm)
               const uTSMName_low = clean(u.tsmName)
-              return uTSM === myCleanName || uTSM === referenceId || 
-                     uTSMName === myCleanName || uTSM_low === myCleanName ||
-                     uTSM_low === referenceId || uTSMName_low === myCleanName
+              
+              // Must have a non-empty TSM field that matches current user
+              const hasTSMAssigned = (uTSM && uTSM === myCleanName) || 
+                                     (uTSM && uTSM === referenceId) ||
+                                     (uTSMName && uTSMName === myCleanName) || 
+                                     (uTSM_low && uTSM_low === myCleanName) ||
+                                     (uTSM_low && uTSM_low === referenceId) || 
+                                     (uTSMName_low && uTSMName_low === myCleanName)
+              return hasTSMAssigned
             })
           } else if (isManager) {
-            // Manager sees all TSMs and TSAs where Manager field matches their name OR ReferenceID
+            // Manager can see all TSMs and TSAs under them
             subs = allUsers.filter(u => {
               const uMan = clean(u.Manager)
               const uManName = clean(u.ManagerName)
               const uMan_low = clean(u.manager)
               const uManName_low = clean(u.managerName)
-              return uMan === myCleanName || uMan === referenceId || 
-                     uManName === myCleanName || uMan_low === myCleanName ||
-                     uMan_low === referenceId || uManName_low === myCleanName
+              const hasManagerAssigned = (uMan && uMan === myCleanName) || 
+                                         (uMan && uMan === referenceId) ||
+                                         (uManName && uManName === myCleanName) || 
+                                         (uMan_low && uMan_low === myCleanName) ||
+                                         (uMan_low && uMan_low === referenceId) || 
+                                         (uManName_low && uManName_low === myCleanName)
+              return hasManagerAssigned
             })
           }
           setSubordinateIds(subs.map(u => u._id))
-          setSubordinateDetails(subs.map(u => ({ id: u._id, name: `${u.Firstname || ""} ${u.Lastname || ""}`.trim() })))
+          setSubordinateDetails(subs.map(u => ({ 
+            id: u._id, 
+            name: `${u.Firstname || ""} ${u.Lastname || ""}`.trim(),
+            role: u.Role || "TSA"
+          })))
         }
       } catch (error) { 
         console.error("Profile Retrieval Error:", error) 
@@ -550,14 +630,37 @@ export default function SiteVisitListPage() {
       try {
         const res = await fetch('/api/user')
         const allUsers = await res.json()
-        const mapping: Record<string, string> = {}
-        allUsers.forEach((u: any) => {
-          if (u.ReferenceID) mapping[u.ReferenceID] = `${u.Firstname || ""} ${u.Lastname || ""}`.trim()
+        
+        // Create a map of ReferenceID to name for quick lookup
+        const names: Record<string, string> = {}
+        allUsers.forEach((user: any) => {
+          const fullName = `${user.Firstname || ''} ${user.Lastname || ''}`.trim()
+          if (user.ReferenceID) {
+            names[user.ReferenceID] = fullName
+          }
         })
-        setStaffNames(mapping)
+        setStaffNames(names)
+        setAllStaff(allUsers)
       } catch (e) { console.error(e) }
     }
     fetchStaff()
+    
+    // Fetch protocols from Firestore for ID to name resolution
+    const fetchProtocols = async () => {
+      try {
+        const protocolsRef = collection(db, 'protocols')
+        const protocolsSnap = await getDocs(protocolsRef)
+        const protocolsMap: Record<string, string> = {}
+        protocolsSnap.docs.forEach(doc => {
+          const data = doc.data()
+          protocolsMap[doc.id] = data.label || data.name || data.protocolName || doc.id
+        })
+        console.log('[Protocols] Loaded:', Object.keys(protocolsMap).length, 'protocols')
+        console.log('[Protocols] Sample:', Object.entries(protocolsMap).slice(0, 3))
+        setAllProtocols(protocolsMap)
+      } catch (e) { console.error('Error fetching protocols:', e) }
+    }
+    fetchProtocols()
   }, [])
 
   // 2. LIVE DATA SYNC WITH ROLE-BASED FILTERING
@@ -579,7 +682,7 @@ export default function SiteVisitListPage() {
      * - OTHERS (MEMBER): Restricted to personal records (submittedBy matches userId)
      */
     const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || ["SUPER ADMIN", "LEADER"].includes(userRole);
-    const isTSM = userRole === "TSM";
+    const isTSM = userRole === "TSM" || userRole.includes("TERRITORY SALES MANAGER");
     const isManager = userRole === "MANAGER";
 
     if (hasGlobalAccess) {
@@ -593,6 +696,26 @@ export default function SiteVisitListPage() {
         const data = doc.data()
         const rawDate = data.appointmentDate?.toDate ? data.appointmentDate.toDate() : new Date()
         
+        // Look up TSA in allStaff to get their details including TSM and Manager
+        const tsaUser = allStaff.find(u => u._id === data.submittedBy || u.UserId === data.submittedBy)
+        const tsaName = tsaUser ? `${tsaUser.Firstname || ""} ${tsaUser.Lastname || ""}`.trim() : (data.submittedByName || data.tsaName)
+        
+        // Get TSM and Manager ReferenceIDs from TSA's record
+        const tsmRefId = tsaUser?.TSM || data.tsm
+        const managerRefId = tsaUser?.Manager || data.Manager || data.salesHead
+        
+        // Filter out placeholder values
+        const isValidRef = (ref: string) => ref && !ref.includes("NOT_SET") && !ref.includes("---") && ref.length > 2
+        const validTsmRef = isValidRef(tsmRefId) ? tsmRefId : null
+        const validManagerRef = isValidRef(managerRefId) ? managerRefId : null
+        
+        // Look up TSM and Manager names by their ReferenceIDs
+        const tsmUser = validTsmRef ? allStaff.find(u => u.ReferenceID === validTsmRef) : null
+        const managerUser = validManagerRef ? allStaff.find(u => u.ReferenceID === validManagerRef) : null
+        
+        const tsmName = tsmUser ? `${tsmUser.Firstname || ""} ${tsmUser.Lastname || ""}`.trim() : (validTsmRef || null)
+        const managerName = managerUser ? `${managerUser.Firstname || ""} ${managerUser.Lastname || ""}`.trim() : (validManagerRef || null)
+        
         return {
           id: doc.id.slice(-6).toUpperCase(),
           fullId: doc.id,
@@ -601,27 +724,59 @@ export default function SiteVisitListPage() {
           date: rawDate.toLocaleDateString('en-CA'), 
           status: data.status?.toUpperCase() || "PENDING",
           tech: data.pic || "UNASSIGNED",
-          type: Array.isArray(data.protocols) ? data.protocols.join(" + ") : (data.protocols || "Standard Engagement"),
+          rawProtocols: data.protocols,
+          type: resolveProtocolNames(data.protocols),
           submittedBy: data.submittedBy,
           submittedByRole: data.submittedByRole,
+          submittedByName: tsaName,
+          tsaName: tsaName,
+          tsmName: tsmName,
+          tsm: tsmRefId,
+          managerName: managerName,
+          salesHead: managerRefId,
           pic: data.pic
         }
       })
 
+      // DEBUG: Log ID information to diagnose filtering issues
+      console.log("[SiteVisit Debug] User ID:", user.id);
+      console.log("[SiteVisit Debug] Subordinate IDs:", subordinateIds);
+      console.log("[SiteVisit Debug] Total records from Firestore:", liveData.length);
+      console.log("[SiteVisit Debug] Sample data:", liveData.slice(0, 3).map(v => ({ 
+        id: v.id, 
+        site: v.site, 
+        type: v.type
+      })));
+      
+      // DEBUG: Log TSA/TSM/Manager lookup results
+      console.log("[SiteVisit Debug] allStaff count:", allStaff.length);
+      console.log("[SiteVisit Debug] Sample lookups:", liveData.slice(0, 3).map(v => ({
+        submittedBy: v.submittedBy,
+        tsaName: v.tsaName,
+        tsm: v.tsm,
+        tsmName: v.tsmName,
+        manager: v.salesHead,
+        managerName: v.managerName
+      })));
+      
       // Client-side filtering for non-admin users
       if (!hasGlobalAccess) {
         if (isTSM || isManager) {
             // TSM and MANAGER can see their own AND all their subordinate visits
-            liveData = liveData.filter(v => 
-                v.submittedBy === user.id || 
-                subordinateIds.includes(v.submittedBy)
-            );
+            liveData = liveData.filter(v => {
+                const match = v.submittedBy === user.id || subordinateIds.includes(v.submittedBy);
+                if (!match) {
+                    console.log(`[SiteVisit Debug] Filtered out - submittedBy: "${v.submittedBy}" !== user.id: "${user.id}", not in subordinates`);
+                }
+                return match;
+            });
         } else {
             // TSA and other Members ONLY see their own visits
             liveData = liveData.filter(v => v.submittedBy === user.id);
         }
       }
       
+      console.log("[SiteVisit Debug] Records after filtering:", liveData.length);
       setVisits(liveData)
       setIsDataLoading(false)
     }, (error) => {
@@ -642,6 +797,16 @@ export default function SiteVisitListPage() {
     })
   }, [visits, searchQuery, selectedStatus, selectedMemberId])
 
+  // Re-resolve protocol names when allProtocols is loaded/updated
+  React.useEffect(() => {
+    if (visits.length > 0 && Object.keys(allProtocols).length > 0) {
+      setVisits(prevVisits => prevVisits.map(v => ({
+        ...v,
+        type: resolveProtocolNames(v.rawProtocols || v.protocols)
+      })))
+    }
+  }, [allProtocols])
+
   // Pagination Logic
   const totalPages = Math.max(1, Math.ceil(filteredVisits.length / PAGE_SIZE))
   const paginatedVisits = React.useMemo(() => {
@@ -660,9 +825,10 @@ export default function SiteVisitListPage() {
 
   return (
     <ProtectedPageWrapper>
-      <SidebarProvider defaultOpen={false}>
-        <AppSidebar userId={user.id} />
-        <SidebarInset className="bg-[#F8FAFA] pb-24 md:pb-10 min-h-screen m-0 rounded-none border-none shadow-none overflow-visible">
+      <TooltipProvider delayDuration={100}>
+        <SidebarProvider defaultOpen={false}>
+          <AppSidebar userId={user.id} />
+          <SidebarInset className="bg-[#F8FAFA] pb-24 md:pb-10 min-h-screen m-0 rounded-none border-none shadow-none overflow-visible">
           
           <PageHeader 
             title="SITE VISIT ENGAGEMENTS" 
@@ -700,17 +866,74 @@ export default function SiteVisitListPage() {
               <RoleInsights user={user} visits={visits} staffNames={staffNames} setShowGuide={setShowGuide} subordinateIds={subordinateIds} />
             )}
 
-            {/* ── IT/ADMIN BANNER & COUNTER ADMIN ── */}
-            {!isUserLoading && (user.dept === "IT" || ["SUPER ADMIN", "MANAGER", "LEADER"].includes(user.role)) && (
-              <div className="flex flex-col gap-4">
-                <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3">
-                  <ShieldCheck className="size-4 text-blue-500 flex-shrink-0" />
-                  <p className="text-[11px] font-black text-blue-700">
-                    Administrative Access — viewing all records for {user.dept} and related personnel.
-                  </p>
-                </div>
-                {/* Site Visit Counter Admin for IT/Engineering */}
-                <SiteVisitCounterAdmin />
+            {/* ── MANAGEMENT DASHBOARD (Collapsible) ── */}
+            {!isUserLoading && (user.dept === "IT" || user.dept === "ENGINEERING" || ["TSM", "MANAGER", "LEADER", "SUPER ADMIN"].includes(user.role)) && (
+              <div className="border border-zinc-200/60 rounded-xl bg-white overflow-hidden">
+                <button
+                  onClick={() => setShowManagementDashboard(!showManagementDashboard)}
+                  className="w-full flex items-center justify-between px-4 py-2.5 bg-zinc-50/80 hover:bg-zinc-100/80 transition-all"
+                >
+                  <div className="flex items-center gap-2">
+                    <BarChart3 className="size-3.5 text-zinc-500" />
+                    <span className="text-[10px] font-black text-zinc-700 uppercase tracking-wider">Management Dashboard</span>
+                    <span className="text-[9px] font-bold text-zinc-400">({visits.length} records)</span>
+                  </div>
+                  <ChevronDown className={cn("size-4 text-zinc-400 transition-transform", showManagementDashboard && "rotate-180")} />
+                </button>
+                
+                {showManagementDashboard && (
+                  <div className="p-3 space-y-3 border-t border-zinc-100">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      {/* IT/ENGINEERING: SLA Tracker + Workload Balancer */}
+                      {(user.dept === "IT" || user.dept === "ENGINEERING" || user.dept === "Engineering") && (
+                        <>
+                          <SLATracker 
+                            visits={visits} 
+                            userRole={user.role} 
+                            userDept={user.dept} 
+                          />
+                          <WorkloadBalancer 
+                            visits={visits} 
+                            staff={allStaff} 
+                            staffNames={staffNames}
+                            userDept={user.dept}
+                            userRole={user.role}
+                          />
+                        </>
+                      )}
+
+                      {/* TSM/MANAGER: Team Performance */}
+                      {["TSM", "MANAGER", "LEADER", "SUPER ADMIN"].includes(user.role) && user.dept !== "IT" && user.dept !== "ENGINEERING" && (
+                        <TeamPerformance 
+                          visits={visits} 
+                          teamMembers={subordinateDetails}
+                          userRole={user.role}
+                          userDept={user.dept}
+                        />
+                      )}
+
+                      {/* TSA/MEMBER: Quick Actions - Compact */}
+                      {["TSA", "MEMBER"].includes(user.role) && (
+                        <QuickActions 
+                          recentVisits={visits.slice(0, 3)}
+                          userRole={user.role}
+                          userDept={user.dept}
+                          onCreateNew={() => router.push("/appointments/site-visit/new")}
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── IT/ENGINEERING ADMIN BANNER ── */}
+            {!isUserLoading && (user.dept === "IT" || user.dept === "ENGINEERING" || user.dept === "Engineering") && (
+              <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3">
+                <ShieldCheck className="size-4 text-blue-500 flex-shrink-0" />
+                <p className="text-[11px] font-black text-blue-700">
+                  Administrative Access — viewing all records for {user.dept} and related personnel.
+                </p>
               </div>
             )}
 
@@ -755,8 +978,8 @@ export default function SiteVisitListPage() {
             </section>
 
             {/* ── VIEW SWITCHER & FILTERS - Compact Header ── */}
-            <div className="sticky top-[56px] md:top-[64px] z-[45] flex items-center justify-between gap-3 bg-white/80 backdrop-blur-md px-3 py-2 rounded-2xl border border-zinc-200/40 shadow-sm transition-all">
-              <div className="flex items-center gap-4">
+            <div className="sticky top-[56px] md:top-[64px] z-[45] flex flex-col md:flex-row md:items-center justify-between gap-2 md:gap-3 bg-white/80 backdrop-blur-md px-3 py-2 rounded-2xl border border-zinc-200/40 shadow-sm transition-all">
+              <div className="flex flex-wrap items-center gap-2 md:gap-4">
                 {/* View Tabs - Ultra Compact */}
                 <div className="flex p-1 bg-zinc-100 rounded-xl">
                   <button 
@@ -803,26 +1026,27 @@ export default function SiteVisitListPage() {
                 {/* Team Member Filter - For TSM/Managers */}
                 {subordinateDetails.length > 0 && (
                   <>
-                    <div className="h-6 w-px bg-zinc-200 hidden xl:block" />
-                    <div className="relative group">
-                      <select 
-                        value={selectedMemberId || ""}
-                        onChange={(e) => { setSelectedMemberId(e.target.value || null); setCurrentPage(1); }}
-                        className="appearance-none bg-zinc-100 border-none text-[9px] font-black uppercase tracking-widest px-8 py-1.5 rounded-lg outline-none focus:ring-1 focus:ring-zinc-900 transition-all text-zinc-600 cursor-pointer"
-                      >
-                        <option value="">All Team Members</option>
+                    <div className="h-5 w-px bg-zinc-200 hidden md:block" />
+                    <Select 
+                      value={selectedMemberId || "all"} 
+                      onValueChange={(val) => { setSelectedMemberId(val === "all" ? null : val); setCurrentPage(1); }}
+                    >
+                      <SelectTrigger className="w-[130px] md:w-[160px] h-8 bg-zinc-100 border-none text-[9px] font-black uppercase tracking-widest text-zinc-600 rounded-lg focus:ring-1 focus:ring-zinc-900">
+                        <User2 size={10} className="text-zinc-400 mr-1" />
+                        <SelectValue placeholder="All Members" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all" className="text-[10px] font-bold">All Members</SelectItem>
                         {subordinateDetails.map(sub => (
-                          <option key={sub.id} value={sub.id}>{sub.name}</option>
+                          <SelectItem key={sub.id} value={sub.id} className="text-[10px] font-bold">{sub.name}</SelectItem>
                         ))}
-                      </select>
-                      <User2 size={10} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
-                      <ChevronDown size={10} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
-                    </div>
+                      </SelectContent>
+                    </Select>
                   </>
                 )}
               </div>
 
-              <div className="flex items-center gap-2 flex-1 max-w-[320px]">
+              <div className="flex items-center gap-2 flex-1 w-full md:max-w-[320px]">
                 <div className="relative flex-1 group">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3 text-zinc-300 group-focus-within:text-zinc-800 transition-colors" />
                   <Input 
@@ -851,16 +1075,18 @@ export default function SiteVisitListPage() {
             {view === "list" ? (
               <div className="space-y-4">
                 <div className="bg-white rounded-[28px] shadow-sm border border-zinc-200/60 overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500">
-                  <div className="hidden md:grid grid-cols-[1fr_2fr_1fr_1.5fr_1fr_44px] bg-zinc-50/80 px-6 py-4 border-b gap-6 items-center">
-                    <span className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-400">Ref_ID</span>
-                    <span className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-400">Client / Engagement</span>
-                    <span className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-400">Schedule</span>
-                    <span className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-400">Personnel (PIC)</span>
-                    <span className="text-[9px] font-black uppercase tracking-[0.2em] text-zinc-400">Status</span>
+                  <div className="hidden md:grid grid-cols-[70px_140px_1fr_90px_90px_90px_110px_32px] bg-zinc-50/80 px-4 py-2 border-b gap-3 items-center">
+                    <span className="text-[8px] font-black uppercase tracking-[0.12em] text-zinc-400">Ref_ID</span>
+                    <span className="text-[8px] font-black uppercase tracking-[0.12em] text-zinc-400">Client</span>
+                    <span className="text-[8px] font-black uppercase tracking-[0.12em] text-zinc-400">Support Category</span>
+                    <span className="text-[8px] font-black uppercase tracking-[0.12em] text-zinc-400">Schedule</span>
+                    <span className="text-[8px] font-black uppercase tracking-[0.12em] text-zinc-400">TSA</span>
+                    <span className="text-[8px] font-black uppercase tracking-[0.12em] text-zinc-400">PIC</span>
+                    <span className="text-[8px] font-black uppercase tracking-[0.12em] text-zinc-400">Status</span>
                     <span />
                   </div>
 
-                  <div className="divide-y divide-zinc-50/80">
+                  <div className="md:divide-y md:divide-zinc-50/80">
                     {isDataLoading ? (
                       Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
                     ) : paginatedVisits.length === 0 ? (
@@ -884,45 +1110,106 @@ export default function SiteVisitListPage() {
                           <div 
                             key={item.fullId}
                             onClick={() => router.push(`/appointments/site-visit/${item.fullId}`)}
-                            className="group grid grid-cols-1 md:grid-cols-[1fr_2fr_1fr_1.5fr_1fr_44px] gap-4 md:gap-6 px-6 py-4 items-center hover:bg-zinc-50/80 cursor-pointer transition-all"
+                            className="group flex flex-col md:grid md:grid-cols-[70px_140px_1fr_90px_90px_90px_110px_32px] gap-3 md:gap-3 px-4 md:px-4 py-2.5 md:hover:bg-zinc-50/80 cursor-pointer transition-all md:border-b md:border-zinc-100 md:last:border-b-0 md:items-center"
                           >
-                            {/* SITE VISIT NUMBER - Display sequential number if available */}
-                            <div className="flex flex-col">
-                              <span className="text-[11px] font-black text-emerald-600 tracking-tight uppercase">
+                            {/* MOBILE VIEW - Card Layout */}
+                            <Card className="md:hidden mb-2 cursor-pointer hover:shadow-md transition-shadow">
+                              <CardContent className="p-3 space-y-2">
+                                {/* Row 1: ID, Client, Status */}
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex flex-col min-w-0 flex-1">
+                                    <span className="text-[11px] font-black text-emerald-600 tracking-tight uppercase truncate">
+                                      {item.siteVisitNo || `#${item.id}`}
+                                    </span>
+                                    <span className="text-[11px] font-black text-zinc-900 uppercase leading-tight truncate">{item.site}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <div className={cn("size-2 rounded-full", meta.dot)} />
+                                    <Badge variant="outline" className={cn("text-[9px] font-black uppercase tracking-wide border-0 bg-transparent", meta.color)}>
+                                      {meta.label}
+                                    </Badge>
+                                  </div>
+                                </div>
+                                
+                                {/* Row 2: Support Category */}
+                                <div className="flex items-start gap-1">
+                                  <span className="text-[8px] font-black text-blue-500 uppercase tracking-wider shrink-0 mt-0.5">Job:</span>
+                                  <span className="text-[10px] font-bold text-zinc-700 leading-tight">{item.type}</span>
+                                </div>
+                                
+                                {/* Row 2: Schedule */}
+                                <div className="flex items-center gap-2 text-zinc-600">
+                                  <CalendarIcon className="size-3 text-zinc-400" />
+                                  <span className="text-[10px] font-bold">{item.date}</span>
+                                </div>
+                                
+                                {/* Row 3: TSA + PIC */}
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="flex flex-col bg-zinc-50 rounded-lg p-2">
+                                    <span className="text-[7px] font-black text-zinc-400 uppercase tracking-wider">TSA</span>
+                                    <span className="text-[10px] font-bold text-zinc-700 truncate">{item.tsaName || item.submittedByName || resolveUserName(item.submittedBy) || "—"}</span>
+                                  </div>
+                                  <div className="flex flex-col bg-zinc-50 rounded-lg p-2">
+                                    <span className="text-[7px] font-black text-zinc-400 uppercase tracking-wider">PIC</span>
+                                    <span className="text-[10px] font-bold text-zinc-700 truncate">{item.tech === "UNASSIGNED" ? "TBD" : (staffNames[item.tech] || item.tech)}</span>
+                                  </div>
+                                </div>
+                                
+                              </CardContent>
+                            </Card>
+
+                            {/* DESKTOP VIEW - Table Layout */}
+                            {/* SITE VISIT NUMBER */}
+                            <div className="hidden md:flex items-center overflow-hidden">
+                              <span className="text-[10px] font-black text-emerald-600 tracking-tight uppercase truncate">
                                 {item.siteVisitNo || `#${item.id}`}
                               </span>
-                              <span className="text-[8px] font-black text-zinc-400 uppercase tracking-widest mt-1 truncate max-w-[120px]">{item.type}</span>
                             </div>
 
-                         <div className="min-w-0">
-                           <p className="text-[12px] font-black text-zinc-900 uppercase tracking-tight truncate leading-none">{item.site}</p>
-                         </div>
-
-                         <div className="hidden md:flex items-center gap-2">
-                           <CalendarIcon className="size-3 text-zinc-400" />
-                           <span className="text-[11px] font-bold text-zinc-700">{item.date}</span>
-                         </div>
-
-                         <div className="flex items-center gap-2">
-                           <div className="size-6 rounded-lg bg-zinc-100 flex items-center justify-center border border-zinc-200 flex-shrink-0">
-                             <User className="size-3 text-zinc-400" />
-                           </div>
-                           <p className={cn("text-[11px] font-black truncate leading-none", item.tech === "UNASSIGNED" ? "text-zinc-400 italic font-bold" : "text-zinc-800")}>
-                             {item.tech === "UNASSIGNED" ? "TBD (Engi Assign)" : (staffNames[item.tech] || item.tech)}
-                           </p>
-                         </div>
-
-                            <div className="flex items-center gap-2">
-                              <div className={cn("size-2 rounded-full", meta.dot)} />
-                              <span className={cn("text-[9px] font-black uppercase tracking-wide truncate", meta.color)}>
-                                {meta.label}
-                              </span>
+                            {/* Client */}
+                            <div className="hidden md:flex items-center overflow-hidden" title={item.site}>
+                              <p className="text-[10px] font-black text-zinc-900 uppercase tracking-tight leading-tight truncate">{item.site}</p>
                             </div>
 
-                            <div className="flex justify-end">
-                              <div className="size-8 flex items-center justify-center rounded-xl border border-transparent group-hover:border-zinc-200 group-hover:bg-white transition-all">
-                                <ChevronRight className="size-4 text-zinc-300 group-hover:text-zinc-800 group-hover:translate-x-0.5 transition-all" />
-                              </div>
+                            {/* Support Category / Protocol */}
+                            <div className="hidden md:flex items-start py-1">
+                              <p className="text-[9px] font-bold text-blue-600 leading-tight">{item.type}</p>
+                            </div>
+
+                            {/* Schedule */}
+                            <div className="hidden md:flex items-center gap-1.5 overflow-hidden">
+                              <CalendarIcon className="size-3 text-zinc-400 flex-shrink-0" />
+                              <span className="text-[10px] font-bold text-zinc-700 truncate">{item.date}</span>
+                            </div>
+
+                            {/* TSA */}
+                            <div className="hidden md:flex flex-col overflow-hidden" title={item.tsaName || item.submittedByName || resolveUserName(item.submittedBy) || "—"}>
+                              <p className="text-[9px] font-bold text-zinc-700 leading-tight truncate">
+                                {item.tsaName || item.submittedByName || resolveUserName(item.submittedBy) || "—"}
+                              </p>
+                              {item.submittedByRole && (
+                                <span className="text-[7px] font-black text-zinc-400 uppercase tracking-wider truncate">{item.submittedByRole}</span>
+                              )}
+                            </div>
+
+                            {/* PIC */}
+                            <div className="hidden md:flex items-center overflow-hidden" title={item.tech === "UNASSIGNED" ? "TBD" : (staffNames[item.tech] || item.tech)}>
+                              <p className={cn("text-[9px] font-bold leading-tight truncate", item.tech === "UNASSIGNED" ? "text-zinc-400 italic" : "text-zinc-800")}>
+                                {item.tech === "UNASSIGNED" ? "TBD" : (staffNames[item.tech] || item.tech)}
+                              </p>
+                            </div>
+
+                            {/* Status */}
+                            <div className="hidden md:flex items-center overflow-hidden">
+                              <Badge variant="outline" className={cn("text-[8px] font-black uppercase tracking-wide border-0 bg-transparent whitespace-nowrap", meta.color)}>
+                                <span className={cn("size-1.5 rounded-full mr-1.5 flex-shrink-0", meta.dot)} />
+                                <span className="truncate">{meta.label}</span>
+                              </Badge>
+                            </div>
+
+                            {/* Arrow */}
+                            <div className="hidden md:flex items-center justify-center">
+                              <ChevronRight className="size-4 text-zinc-300 group-hover:text-zinc-800 group-hover:translate-x-0.5 transition-all flex-shrink-0" />
                             </div>
                           </div>
                         )
@@ -975,6 +1262,7 @@ export default function SiteVisitListPage() {
           <UserGuideDialog open={showGuide} onOpenChange={setShowGuide} />
         </SidebarInset>
       </SidebarProvider>
+    </TooltipProvider>
     </ProtectedPageWrapper>
   )
 }

@@ -58,7 +58,33 @@ Enhanced the dashboard and sidebar with department-specific and role-based featu
   - Only visible to Managers and Super Admins
   - Shows items requiring immediate attention
 
-### 3. Permission System Integration
+### 3. Recent Activity & Productivity Hub Fixes (April 2026)
+
+#### New Features:
+- **Expanded Activity Coverage**: Recent activity feed now includes `Site Visit` and `Testing` updates.
+- **Visual Color Coding**: Each activity type has its own distinct theme:
+    - **Orange**: Job Requests (FileText icon)
+    - **Indigo**: DIAlux Simulations (Monitor icon)
+    - **Blue**: Site Visits (CalendarCheck icon)
+    - **Violet**: Testing Items (ClipboardCheck icon)
+    - **Emerald**: Shop Drawings (Wrench icon)
+- **Smart Time Formatting**: Implemented `relativeTime` helper that handles future dates and provides fallback "N/A" for missing data.
+- **Navigation Fixes**: Resolved broken redirect paths in the Productivity Hub for DIAlux and Shop Drawing requests.
+
+#### Security & Stability:
+- **Strict Role Detection**: Refined `hasGlobalAccess` to include the `ENGINEERING` department and strictly separate TSMs from global Managers.
+- **Territory Isolation**: Fixed a bug where TSMs could see other TSMs' data; now strictly limited to own data + assigned TSAs.
+- **Real-time SPF Sync**: Integrated Supabase realtime channels for SPF Product Requests in the dashboard notifications.
+- **Critical Alert Styling**: Added a red-tinted background and high-contrast text for `ActivityCard` when critical testing items are overdue.
+
+### 4. Layout and UI Optimization
+
+- **Sticky Header & Sidebar Sync**: Adjusted the sticky offset of the dashboard sidebar (`top-24`) to prevent it from overlapping with the main navigation header (`top-0`).
+- **Mobile Header Refinement**: Increased the padding and margin of the mobile red header to prevent overlap with the main content cards when using the pulled-up layout (`-mt-8`).
+- **Robust Widget Layouts**: Refined the `DepartmentPulse` widget with a more stable `min-h` and flex layout to prevent internal element overlap during data syncing.
+- **Z-Index Management**: Implemented strict z-index layering for sticky columns to ensure correct stacking order across all screen resolutions.
+
+### 5. Permission System Integration
 
 All new features respect the existing permission system:
 - Quick actions check department membership

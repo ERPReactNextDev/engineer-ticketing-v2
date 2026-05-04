@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear LocalStorage</title>
+    <style>
+        body { font-family: sans-serif; padding: 40px; background: #f5f5f5; }
+        .box { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        button { background: #E33636; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #c62e2e; }
+        .success { color: green; margin-top: 20px; }
+        pre { background: #f5f5f5; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>🧹 Clear LocalStorage</h1>
+        <p>This will clear your localStorage to refresh role detection. Click the button below, then navigate back to the dashboard.</p>
+        <button onclick="clearStorage()">Clear LocalStorage</button>
+        <div id="result"></div>
+    </div>
+    
+    <script>
+        function clearStorage() {
+            const before = { ...localStorage };
+            localStorage.clear();
+            const after = { ...localStorage };
+            
+            document.getElementById('result').innerHTML = `
+                <div class="success">
+                    <h3>✅ LocalStorage Cleared!</h3>
+                    <p><strong>Before:</strong></p>
+                    <pre>${JSON.stringify(before, null, 2)}</pre>
+                    <p><strong>After:</strong></p>
+                    <pre>${JSON.stringify(after, null, 2)}</pre>
+                    <p><a href="/dashboard">Go to Dashboard →</a></p>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

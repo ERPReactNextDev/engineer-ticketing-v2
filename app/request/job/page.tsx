@@ -398,10 +398,32 @@ export default function JobRequestManagementPage() {
                 const name = `${data.Firstname || ""} ${data.Lastname || ""}`.trim()
                 const referenceId = (data.ReferenceID || "").toUpperCase()
 
-                // Robust Role Detection
-                const isTSM = firestoreRole === "TSM" || firestoreRole === "TERRITORY SALES MANAGER" || (data.Position || "").toUpperCase().includes("TSM") || (data.Position || "").toUpperCase().includes("TERRITORY SALES MANAGER")
-                const isManager = firestoreRole === "MANAGER" || firestoreRole === "SALES HEAD" || (data.Position || "").toUpperCase().includes("MANAGER") || (data.Position || "").toUpperCase().includes("SALES HEAD")
-                const finalRole = isManager ? "MANAGER" : (isTSM ? "TSM" : firestoreRole)
+                /**
+                 * ROLE DETECTION STRATEGY:
+                 * - For SALES dept: Use MongoDB Position as primary (supports TSM/TSA hierarchy)
+                 * - For other depts: Use Firebase Role as primary (IT, Engineering, etc.)
+                 * - Fallback to Firebase Role if Position is empty/generic
+                 */
+                const dept = (data.Department || "").toUpperCase()
+                const position = (data.Position || "").toUpperCase()
+                const isSalesDept = dept === "SALES"
+
+                // Sales-specific role detection based on Position
+                const isTSM = isSalesDept
+                    ? (position.includes("TERRITORY SALES MANAGER") && !position.includes("ASSOCIATE"))
+                    : (firestoreRole === "TSM" || firestoreRole === "TERRITORY SALES MANAGER")
+
+                const isTSA = isSalesDept && position.includes("TERRITORY SALES ASSOCIATE")
+
+                const isManager = isSalesDept
+                    ? (position.includes("SALES HEAD") || position.includes("MANAGER"))
+                    : (firestoreRole === "MANAGER" || firestoreRole === "SALES HEAD")
+
+                // Determine final role priority: Manager > TSM > TSA > Firestore Role
+                let finalRole = firestoreRole
+                if (isManager) finalRole = "MANAGER"
+                else if (isTSM) finalRole = "TSM"
+                else if (isTSA) finalRole = "TSA"
 
                 setUser({
                     id: storedId,
@@ -421,26 +443,43 @@ export default function JobRequestManagementPage() {
                     const myCleanName = clean(name)
 
                     if (isTSM) {
-                        // TSM sees all TSAs where TSM field matches their name OR ReferenceID
+                        // TSM can only see TSAs (MEMBER role) that have THIS TSM assigned
+                        // Exclude other TSMs and users with empty TSM field
                         subs = allUsers.filter(u => {
+                            // Skip if this user is also a TSM (prevent cross-visibility)
+                            const uRole = (u.Role || u.role || "MEMBER").toUpperCase()
+                            const uPosition = (u.Position || "").toUpperCase()
+                            if (uRole === "TSM" || uPosition.includes("TERRITORY SALES MANAGER")) return false
+
+                            // Check if this user has the current TSM assigned to them
                             const uTSM = clean(u.TSM)
                             const uTSMName = clean(u.TSMName)
                             const uTSM_low = clean(u.tsm)
                             const uTSMName_low = clean(u.tsmName)
-                            return uTSM === myCleanName || uTSM === referenceId ||
-                                   uTSMName === myCleanName || uTSM_low === myCleanName ||
-                                   uTSM_low === referenceId || uTSMName_low === myCleanName
+                            
+                            // Must have a non-empty TSM field that matches current user
+                            const hasTSMAssigned = (uTSM && uTSM === myCleanName) || 
+                                                   (uTSM && uTSM === referenceId) ||
+                                                   (uTSMName && uTSMName === myCleanName) || 
+                                                   (uTSM_low && uTSM_low === myCleanName) ||
+                                                   (uTSM_low && uTSM_low === referenceId) || 
+                                                   (uTSMName_low && uTSMName_low === myCleanName)
+                            return hasTSMAssigned
                         })
                     } else if (isManager) {
-                        // Manager sees all TSMs and TSAs where Manager field matches their name OR ReferenceID
+                        // Manager can see all TSMs and TSAs under them
                         subs = allUsers.filter(u => {
                             const uMan = clean(u.Manager)
                             const uManName = clean(u.ManagerName)
                             const uMan_low = clean(u.manager)
                             const uManName_low = clean(u.managerName)
-                            return uMan === myCleanName || uMan === referenceId ||
-                                   uManName === myCleanName || uMan_low === myCleanName ||
-                                   uMan_low === referenceId || uManName_low === myCleanName
+                            const hasManagerAssigned = (uMan && uMan === myCleanName) || 
+                                                       (uMan && uMan === referenceId) ||
+                                                       (uManName && uManName === myCleanName) || 
+                                                       (uMan_low && uMan_low === myCleanName) ||
+                                                       (uMan_low && uMan_low === referenceId) || 
+                                                       (uManName_low && uManName_low === myCleanName)
+                            return hasManagerAssigned
                         })
                     }
                     setSubordinateIds(subs.map(u => u._id))

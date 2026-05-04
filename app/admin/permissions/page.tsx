@@ -120,7 +120,19 @@ const DEPARTMENTS = [
     "Warehouse Operations",
 ]
 
-const ROLES = ["MEMBER", "LEADER", "MANAGER", "SUPER ADMIN"]
+// Standard roles for most departments
+const STANDARD_ROLES = ["MEMBER", "LEADER", "MANAGER", "SUPER ADMIN"]
+
+// Sales-specific roles for Sales department hierarchy
+const SALES_ROLES = ["TERRITORY SALES ASSOCIATE", "TERRITORY SALES MANAGER", "SALES HEAD", "SUPER ADMIN"]
+
+// Get roles based on department
+const getRolesForDepartment = (dept: string): string[] => {
+    if (dept === "Sales") return SALES_ROLES
+    return STANDARD_ROLES
+}
+
+const ROLES = getRolesForDepartment(DEPARTMENTS[0])
 
 /* ─────────────────────────────────────────────────────────
    PERMISSION SECTIONS CONFIG
@@ -214,10 +226,14 @@ const DEPT_COLORS: Record<string, string> = {
 }
 
 const ROLE_COLORS: Record<string, string> = {
-    "SUPER ADMIN": "bg-zinc-900 text-white border-zinc-800",
-    "MANAGER":     "bg-blue-600 text-white border-blue-700",
-    "LEADER":      "bg-violet-100 text-violet-700 border-violet-200",
-    "MEMBER":      "bg-zinc-100 text-zinc-600 border-zinc-200",
+    "SUPER ADMIN":              "bg-zinc-900 text-white border-zinc-800",
+    "MANAGER":                  "bg-blue-600 text-white border-blue-700",
+    "LEADER":                   "bg-violet-100 text-violet-700 border-violet-200",
+    "MEMBER":                   "bg-zinc-100 text-zinc-600 border-zinc-200",
+    // Sales-specific roles
+    "TERRITORY SALES MANAGER":  "bg-amber-100 text-amber-700 border-amber-200",
+    "TERRITORY SALES ASSOCIATE":"bg-orange-100 text-orange-700 border-orange-200",
+    "SALES HEAD":               "bg-red-100 text-red-700 border-red-200",
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -412,7 +428,9 @@ function PermissionSection({
 export default function PermissionsPage() {
     const [userId, setUserId]             = React.useState<string | null>(null)
     const [selectedDept, setSelectedDept] = React.useState(DEPARTMENTS[0])
-    const [selectedRole, setSelectedRole] = React.useState(ROLES[0])
+    // Get roles dynamically based on department
+    const availableRoles = React.useMemo(() => getRolesForDepartment(selectedDept), [selectedDept])
+    const [selectedRole, setSelectedRole] = React.useState(availableRoles[0])
     const [perms, setPerms]               = React.useState<PermissionDoc>(DEFAULT_PERMISSIONS)
     const [isLoading, setIsLoading]       = React.useState(false)
     const [isSaving, setIsSaving]         = React.useState(false)
@@ -457,6 +475,12 @@ export default function PermissionsPage() {
         })
         return () => unsub()
     }, [])
+
+    /* ── Reset role when department changes ── */
+    React.useEffect(() => {
+        const newRoles = getRolesForDepartment(selectedDept)
+        setSelectedRole(newRoles[0])
+    }, [selectedDept])
 
     /* ── Load when dept/role selection changes ── */
     React.useEffect(() => {
@@ -541,7 +565,7 @@ export default function PermissionsPage() {
     const docId        = makeDocId(selectedDept, selectedRole)
     const isConfigured = !!allConfigs[docId]
     const totalConfigured = Object.keys(allConfigs).length
-    const totalCombos = DEPARTMENTS.length * ROLES.length
+    const totalCombos = DEPARTMENTS.length * availableRoles.length
     const enabledTotal = React.useMemo(() => {
         return SECTIONS.reduce((sum, section) => sum + Object.values((perms as any)[section.key] || {}).filter(Boolean).length, 0)
     }, [perms])
@@ -686,7 +710,7 @@ export default function PermissionsPage() {
                                     variant="outline"
                                     onClick={() => {
                                         setSelectedDept(DEPARTMENTS[0])
-                                        setSelectedRole(ROLES[0])
+                                        setSelectedRole(getRolesForDepartment(DEPARTMENTS[0])[0])
                                         setSearchTerm("")
                                     }}
                                     className="h-10 w-10 rounded-xl bg-white border-zinc-200 hover:bg-zinc-50 flex items-center justify-center p-0 flex-shrink-0"
@@ -779,7 +803,7 @@ export default function PermissionsPage() {
                         <section className="bg-white rounded-[24px] border border-zinc-200/50 shadow-sm overflow-hidden w-full">
                             <div className="px-6 py-4 border-b border-zinc-50 flex items-center gap-3">
                                 <Building2 className="size-4 text-zinc-400" />
-                                <h2 className="font-black text-[11px] uppercase tracking-widest text-zinc-800">
+                                <h2 className="font-black text-[11px] uppercase tracking-wide text-zinc-800">
                                     Configuration Overview
                                 </h2>
                                 <span className="ml-auto text-[9px] font-black text-zinc-400 uppercase">
@@ -793,9 +817,9 @@ export default function PermissionsPage() {
                                             <th className="text-left px-5 py-3 font-black uppercase tracking-widest text-zinc-400 w-40">
                                                 Department
                                             </th>
-                                            {ROLES.map(r => (
-                                                <th key={r} className="text-center px-3 py-3 font-black uppercase tracking-widest text-zinc-400">
-                                                    {r}
+                                            {availableRoles.map(role => (
+                                                <th key={role} className="text-center px-3 py-3 font-black uppercase tracking-widest text-zinc-400">
+                                                    {role}
                                                 </th>
                                             ))}
                                         </tr>
@@ -811,7 +835,7 @@ export default function PermissionsPage() {
                                                         {dept.length > 14 ? dept.slice(0, 12) + "…" : dept}
                                                     </span>
                                                 </td>
-                                {ROLES.map(role => {
+                                                {getRolesForDepartment(dept).map(role => {
                                                     const id  = makeDocId(dept, role)
                                                     const cfg = allConfigs[id]
                                                     const serviceCount = cfg
@@ -909,7 +933,7 @@ export default function PermissionsPage() {
                                 {/* Role pills */}
                                 <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mt-2">Role</p>
                                 <div className="flex flex-wrap gap-2">
-                                    {ROLES.map(role => (
+                                    {availableRoles.map(role => (
                                         <button
                                             key={role}
                                             onClick={() => setSelectedRole(role)}

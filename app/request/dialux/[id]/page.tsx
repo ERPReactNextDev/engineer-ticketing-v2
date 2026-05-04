@@ -83,8 +83,19 @@ export default function DialuxRequestReviewPage() {
     const timerInterval = setInterval(() => {
       let referenceTime = data?.createdAt;
       let hoursLimit = 3;
+      let completionTime = null;
 
-      if (status === "REVIEWING_ASSESSMENT") {
+      // Terminal statuses - calculate total SLA from createdAt to completion
+      const terminalStatuses = ["SIMULATION_RESULTS", "COMPLETED", "CLOSED", "DONE"];
+      const isTerminal = terminalStatuses.includes(status);
+      
+      if (isTerminal) {
+        // Total SLA for completed simulations: 120 hours (5 business days)
+        referenceTime = data?.createdAt;
+        hoursLimit = 120;
+        // Use simulation completion time, or current time if not set
+        completionTime = data?.simulationCompletedAt || data?.completedAt || data?.closedAt || { seconds: Date.now() / 1000 };
+      } else if (status === "REVIEWING_ASSESSMENT") {
         referenceTime = data?.assessmentCompletedAt;
         hoursLimit = 24;
       } else if (status === "PENDING_COSTING") {
@@ -103,10 +114,15 @@ export default function DialuxRequestReviewPage() {
 
       if (referenceTime) {
         const start = new Date(referenceTime.seconds * 1000).getTime();
-        const limit = start + (hoursLimit * 60 * 60 * 1000); 
+        const limit = start + (hoursLimit * 60 * 60 * 1000);
         
-        const now = new Date().getTime();
-        const diff = limit - now;
+        // For terminal statuses, compare completion time against limit
+        // For active statuses, compare current time against limit
+        const comparisonTime = isTerminal && completionTime 
+          ? new Date(completionTime.seconds * 1000).getTime()
+          : new Date().getTime();
+        
+        const diff = limit - comparisonTime;
         const absDiff = Math.abs(diff);
 
         const hours = Math.floor(absDiff / (1000 * 60 * 60));
@@ -413,13 +429,13 @@ export default function DialuxRequestReviewPage() {
                    "text-[6px] md:text-[7px] font-black uppercase tracking-widest leading-none",
                    isOverdue ? "text-red-500" : "text-zinc-400"
                  )}>
-                   {isOverdue ? "SLA Breach" : "SLA Window"}
+                   {isOverdue ? (status === "COMPLETED" || status === "CLOSED" ? "Completed (Breach)" : "SLA Breach") : (status === "COMPLETED" || status === "CLOSED" ? "Total SLA" : "SLA Window")}
                  </span>
                  <span className={cn(
                    "text-[8px] md:text-[9px] font-bold uppercase mt-0.5",
                    isOverdue ? "text-red-600" : "text-zinc-500"
                  )}>
-                   {status === "PENDING" ? "Engineering (3h)" : status === "PENDING_COSTING" ? "Procurement (1h)" : status === "PENDING_COST_APPROVAL" ? "Sales (24h)" : status === "IN_QUEUE" ? "Designing (1h)" : status === "IN_DESIGN" ? "Work Phase" : "Review/Sales (24h)"}
+                   {status === "PENDING" ? "Engineering (3h)" : status === "PENDING_COSTING" ? "Procurement (1h)" : status === "PENDING_COST_APPROVAL" ? "Sales (24h)" : status === "IN_QUEUE" ? "Designing (1h)" : status === "IN_DESIGN" ? "Work Phase" : status === "COMPLETED" || status === "CLOSED" ? "120h (5 days)" : "Review/Sales (24h)"}
                  </span>
                </div>
                <div className="flex items-center gap-1.5 md:gap-2">
@@ -1026,7 +1042,10 @@ export default function DialuxRequestReviewPage() {
                <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm flex flex-col justify-center gap-1">
                   <span className="text-[7px] font-black text-zinc-400 uppercase tracking-widest">SLA Compliance</span>
                   <span className={cn("text-xs font-black uppercase", isOverdue ? "text-red-500" : "text-green-500")}>
-                    {isOverdue ? "BREACHED" : "ON-TIME"}
+                    {isOverdue 
+                      ? (status === "COMPLETED" || status === "CLOSED" ? "COMPLETED (BREACH)" : "BREACHED")
+                      : (status === "COMPLETED" || status === "CLOSED" ? "COMPLETED ON-TIME" : "ON-TIME")
+                    }
                   </span>
                </div>
                <div className="bg-white p-4 rounded-2xl border border-zinc-100 shadow-sm flex flex-col justify-center gap-1">

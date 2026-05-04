@@ -17,7 +17,8 @@ import {
     Building2,
     ClipboardList,
     Timer,
-    Info
+    Info,
+    XCircle
 } from "lucide-react"
 
 import { db } from "@/lib/firebase"
@@ -46,6 +47,8 @@ export default function AppointmentDetailsPage() {
     const [userContext, setUserContext] = React.useState({ role: "", id: "", name: "", profilePicture: "", dept: "", userRole: "" })
     const [actionLoading, setActionLoading] = React.useState(false)
     const [confNotes, setConfNotes] = React.useState("")
+    const [cancelReason, setCancelReason] = React.useState("")
+    const [showCancelForm, setShowCancelForm] = React.useState(false)
 
     const [countdown, setCountdown] = React.useState("00:00:00")
     const [isOverdue, setIsOverdue] = React.useState(false)
@@ -232,6 +235,34 @@ export default function AppointmentDetailsPage() {
         }
     }
 
+    const handleCancel = async () => {
+        if (!cancelReason.trim()) {
+            toast.error("Please provide a reason for cancellation")
+            return
+        }
+        setActionLoading(true)
+        const toastId = toast.loading("Cancelling request...")
+        try {
+            const docRef = doc(db, "appointments", id)
+            await updateDoc(docRef, {
+                status: "CANCELLED",
+                updatedAt: serverTimestamp(),
+                cancelledAt: serverTimestamp(),
+                cancelledBy: userContext.name,
+                cancelledById: userContext.id,
+                cancelReason: cancelReason.trim(),
+                lastModifiedBy: userContext.id,
+            })
+            toast.success("Request has been cancelled.", { id: toastId })
+            setShowCancelForm(false)
+            setCancelReason("")
+        } catch (err) {
+            toast.error("Failed to cancel request. Please try again.", { id: toastId })
+        } finally {
+            setActionLoading(false)
+        }
+    }
+
     const handleDownload = async (url: string) => {
         const toastId = toast.loading("Preparing download...")
         try {
@@ -359,7 +390,7 @@ export default function AppointmentDetailsPage() {
 
                 {/* --- STICKY HEADER SECTION --- */}
                 <PageHeader
-                    title={`REF: ${id.slice(-8).toUpperCase()}`}
+                    title={`REF: ${data?.siteVisitNo || id.slice(-8).toUpperCase()}`}
                     version="V2.8-STABLE"
                     showBackButton={true}
                     trigger={<SidebarTrigger className="mr-2" />}
@@ -438,9 +469,9 @@ export default function AppointmentDetailsPage() {
                                 style={{ width: isPending ? '0%' : isConfirmed ? '50%' : '100%' }}
                             />
                             <div className="flex items-center justify-between w-full relative z-10">
-                                <MiniStep active={true} completed={!isPending} label="Scheduled" />
-                                <MiniStep active={isConfirmed || isCompleted} completed={isCompleted} label="Reported" />
-                                <MiniStep active={isCompleted} completed={isCompleted} label="Finalized" />
+                                <MiniStep active={true} completed={!isPending} label="Pending" />
+                                <MiniStep active={isConfirmed || isCompleted} completed={isCompleted} label="Completed" />
+                                <MiniStep active={isCompleted} completed={isCompleted} label="Acknowledged" />
                             </div>
                         </div>
 
@@ -498,7 +529,7 @@ export default function AppointmentDetailsPage() {
                         <CompactStat label="CLIENT" value={data?.client} icon={Building2} />
                         <CompactStat label="REQUESTOR" value={submitterName || data?.requestorName || "UNSPECIFIED"} icon={Fingerprint} />
                         <CompactStat label="ENGINEER" value={data?.pic || "UNASSIGNED"} icon={User} color={!data?.pic || data?.pic === "UNASSIGNED" ? "text-slate-400" : "text-blue-600"} />
-                        <CompactStat label="REF ID" value={id.slice(-8).toUpperCase()} icon={Terminal} />
+                        <CompactStat label="REF ID" value={data?.siteVisitNo || id.slice(-8).toUpperCase()} icon={Terminal} />
                     </section>
 
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-1.5 md:gap-2">
@@ -549,7 +580,12 @@ export default function AppointmentDetailsPage() {
 
                                                 <Button
                                                     disabled={actionLoading || selectedAssignees.length === 0}
-                                                    onClick={() => handleStatusUpdate("PENDING", { pic: selectedAssignees.join(", ") })}
+                                                    onClick={() => handleStatusUpdate("PENDING", { 
+                                                        pic: selectedAssignees.join(", "),
+                                                        assignedAt: serverTimestamp(),
+                                                        assignedBy: userContext.name,
+                                                        assignedById: userContext.id
+                                                    })}
                                                     className="w-full h-9 bg-zinc-900 hover:bg-zinc-800 text-white font-black rounded-lg uppercase tracking-widest transition-all text-[9px]"
                                                 >
                                                     {actionLoading ? <Loader2 className="animate-spin size-3.5" /> : `Confirm ${selectedAssignees.length > 1 ? 'Multiple' : 'Assignment'}`}
@@ -562,13 +598,21 @@ export default function AppointmentDetailsPage() {
                                                         <div className="p-1 bg-blue-500 rounded text-white">
                                                             <Cpu size={12} />
                                                         </div>
-                                                        <h3 className="text-[9px] font-black uppercase tracking-tight">Report Form</h3>
+                                                        <h3 className="text-[9px] font-black uppercase tracking-tight">Visit Confirmation</h3>
                                                     </div>
                                                     <div className="flex items-center gap-1.5">
                                                         <div className="size-1 rounded-full bg-blue-500 animate-pulse" />
                                                         <span className="text-[7px] font-bold text-blue-400 uppercase">Live</span>
                                                     </div>
                                                 </div>
+
+                                                {/* PIC Assignment Info */}
+                                                {data?.assignedAt && (
+                                                    <div className="flex items-center gap-1.5 text-[6px] text-slate-400 uppercase tracking-widest">
+                                                        <User size={8} className="text-blue-400" />
+                                                        <span>Assigned: {data.assignedBy || 'System'} • {data.assignedAt?.toDate ? data.assignedAt.toDate().toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'}</span>
+                                                    </div>
+                                                )}
 
                                                 <div className="space-y-2">
                                                     <div className="flex gap-1.5">
@@ -607,7 +651,62 @@ export default function AppointmentDetailsPage() {
                                                         onClick={() => handleStatusUpdate("CONFIRMED", { confirmationNotes: confNotes })}
                                                         className="w-full h-9 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-lg uppercase tracking-widest transition-all group shadow-lg shadow-blue-600/20 text-[9px]"
                                                     >
-                                                        {actionLoading ? <Loader2 className="animate-spin size-3.5" /> : "Submit Visit Report"}
+                                                        {actionLoading ? <Loader2 className="animate-spin size-3.5" /> : "Confirm Visit Complete"}
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {isPending && (isRequestor || isSales || isStaff) && (
+                                    <div className="bg-white border border-red-100 p-3 rounded-xl shadow-sm">
+                                        {!showCancelForm ? (
+                                            <button
+                                                onClick={() => setShowCancelForm(true)}
+                                                className="w-full flex items-center justify-center gap-2 py-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-all"
+                                            >
+                                                <XCircle size={14} />
+                                                <span className="text-[9px] font-black uppercase tracking-widest">Cancel / Decline Request</span>
+                                            </button>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                <div className="flex items-center gap-2 border-b border-red-100 pb-2">
+                                                    <div className="size-7 bg-red-50 rounded-lg flex items-center justify-center text-red-600">
+                                                        <XCircle size={14} />
+                                                    </div>
+                                                    <div>
+                                                        <h3 className="text-[9px] font-black uppercase text-red-900 tracking-tight leading-none">Cancel Request</h3>
+                                                        <p className="text-[6px] font-bold text-red-400 uppercase tracking-widest mt-0.5">Reason Required</p>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div className="space-y-2">
+                                                    <Textarea
+                                                        value={cancelReason}
+                                                        onChange={(e) => setCancelReason(e.target.value)}
+                                                        className="min-h-[60px] rounded-lg bg-red-50/50 border-red-100 font-medium text-[11px] focus:border-red-300 transition-all resize-none placeholder:text-red-300 text-red-900 p-2 leading-snug"
+                                                        placeholder="Enter reason for cancellation..."
+                                                    />
+                                                </div>
+
+                                                <div className="flex gap-2">
+                                                    <Button
+                                                        variant="outline"
+                                                        onClick={() => {
+                                                            setShowCancelForm(false)
+                                                            setCancelReason("")
+                                                        }}
+                                                        className="flex-1 h-8 bg-white hover:bg-slate-50 text-slate-600 font-bold rounded-lg uppercase text-[9px] border-slate-200"
+                                                    >
+                                                        Back
+                                                    </Button>
+                                                    <Button
+                                                        disabled={actionLoading || !cancelReason.trim()}
+                                                        onClick={handleCancel}
+                                                        className="flex-1 h-8 bg-red-600 hover:bg-red-500 text-white font-black rounded-lg uppercase tracking-widest transition-all text-[9px]"
+                                                    >
+                                                        {actionLoading ? <Loader2 className="animate-spin size-3" /> : "Confirm Cancel"}
                                                     </Button>
                                                 </div>
                                             </div>
@@ -683,9 +782,21 @@ export default function AppointmentDetailsPage() {
                                     )}
                                 </div>
                                 <div className="p-2.5 pb-0.5 space-y-0">
-                                    <TimelineItem label="Start" time={data?.createdAt} status="done" desc="Request" />
-                                    <TimelineItem label="Report" time={data?.confirmedAt} status={isConfirmed || isCompleted ? "done" : "pending"} desc="Engineer" />
-                                    <TimelineItem label="End" time={data?.completedAt} status={isCompleted ? "done" : "pending"} desc="Final" isLast />
+                                    <TimelineItem label="Created" time={data?.createdAt} status="done" desc="Pending Request submitted" />
+                                    <TimelineItem 
+                                        label="In Progress" 
+                                        time={data?.confirmedAt} 
+                                        status={isConfirmed ? "current" : isCompleted ? "done" : "pending"} 
+                                        desc={isConfirmed ? "Request Completed - awaiting approval" : "Engineer to submit report"}
+                                        dept={isConfirmed ? "SALES MGMT" : isPending ? "ENGINEERING" : undefined}
+                                    />
+                                    <TimelineItem 
+                                        label="Acknowledged" 
+                                        time={data?.completedAt} 
+                                        status={isCompleted ? "done" : "pending"} 
+                                        desc="Request Acknowledge - completed" 
+                                        isLast 
+                                    />
                                 </div>
                             </div>
                         </div>
@@ -916,32 +1027,58 @@ function Step({ active, completed, icon: Icon, label, date }: any) {
     )
 }
 
-function TimelineItem({ label, time, status, desc, isLast = false }: any) {
-    const formattedTime = time?.toDate ? time.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) : "---"
+function TimelineItem({ label, time, status, desc, dept, isLast = false }: any) {
     const isActive = status === "done"
+    const isCurrent = status === "current"
+    
+    // Format date and time
+    const formatDateTime = (timestamp: any) => {
+        if (!timestamp?.toDate) return "---"
+        const date = timestamp.toDate()
+        const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })
+        return `${dateStr} • ${timeStr}`
+    }
+    
+    const formattedDateTime = formatDateTime(time)
+    
     return (
         <div className="relative flex gap-3">
             {!isLast && <div className={cn("absolute left-[5px] top-4 w-[1px] h-full", isActive ? "bg-blue-100" : "bg-slate-50")} />}
             <div className={cn(
                 "relative z-10 size-[10px] rounded-full border-2 mt-1 flex items-center justify-center transition-all",
+                isCurrent ? "bg-amber-500 border-white ring-2 ring-amber-50 shadow-xs" :
                 isActive ? "bg-blue-600 border-white ring-2 ring-blue-50 shadow-xs" : "bg-white border-slate-200"
             )} />
-            <div className="pb-3">
-                <div className="flex items-center gap-2">
-                    <span className={cn("text-[9px] font-bold uppercase tracking-tight", isActive ? "text-slate-900" : "text-slate-400 opacity-60")}>{label}</span>
-                    {isActive && (
-                        <span className="text-[7px] px-1 rounded-full font-medium bg-blue-50 text-blue-600 border border-blue-100">
-                            {formattedTime}
+            <div className="pb-3 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <span className={cn("text-[9px] font-bold uppercase tracking-tight", 
+                        isCurrent ? "text-amber-600" :
+                        isActive ? "text-slate-900" : "text-slate-400 opacity-60"
+                    )}>{label}</span>
+                    {(isActive || isCurrent) && (
+                        <span className={cn("text-[7px] px-1.5 py-0.5 rounded-full font-medium border",
+                            isCurrent ? "bg-amber-50 text-amber-600 border-amber-100" :
+                            "bg-blue-50 text-blue-600 border-blue-100"
+                        )}>
+                            {formattedDateTime}
+                        </span>
+                    )}
+                    {isCurrent && dept && (
+                        <span className="text-[7px] px-1.5 py-0.5 rounded-full font-black uppercase bg-red-50 text-red-600 border border-red-100">
+                            {dept} • BALL
                         </span>
                     )}
                 </div>
-                <p className="text-[8px] text-slate-500 font-medium leading-none mt-0.5">{desc}</p>
+                <p className={cn("text-[8px] font-medium leading-none mt-0.5",
+                    isCurrent ? "text-amber-600" : "text-slate-500"
+                )}>{desc}</p>
             </div>
         </div>
     )
 }
 
-function ManifestItem({ label, value, icon: Icon, isLongText = false, isHighlight = false, canCopy = false }: any) {
+function ManifestItem({ label, value, icon: Icon, isLongText = false, isHighlight = false, canCopy = false }: { label: string, value: string, icon: any, isLongText?: boolean, isHighlight?: boolean, canCopy?: boolean }) {
     const copyToClipboard = () => {
         if (!value) return
         navigator.clipboard.writeText(value)

@@ -12,7 +12,7 @@ import {
 // ── TYPES ──
 type Department = "ENGINEERING" | "SALES" | "PROCUREMENT" | "WAREHOUSE OPERATIONS" | "IT" | string
 
-type UserRole = "SUPER ADMIN" | "MANAGER" | "LEADER" | "MEMBER" | string
+type UserRole = "SUPER ADMIN" | "MANAGER" | "LEADER" | "MEMBER" | "SALES HEAD" | "TERRITORY SALES MANAGER" | "TERRITORY SALES ASSOCIATE" | string
 
 interface DepartmentWidgetsProps {
   department: Department
@@ -146,6 +146,21 @@ const ROLE_WIDGETS: Record<string, { title: string; icon: any; color: string }[]
     { title: "Total Users", icon: Users, color: "bg-blue-50 text-blue-600 border-blue-100" },
     { title: "Active Sessions", icon: Zap, color: "bg-amber-50 text-amber-600 border-amber-100" },
     { title: "System Health", icon: CheckCircle2, color: "bg-emerald-50 text-emerald-600 border-emerald-100" },
+  ],
+  "SALES HEAD": [
+    { title: "Sales Team", icon: Users, color: "bg-violet-50 text-violet-600 border-violet-100" },
+    { title: "Territories", icon: Target, color: "bg-amber-50 text-amber-600 border-amber-100" },
+    { title: "Revenue Pipeline", icon: TrendingUp, color: "bg-emerald-50 text-emerald-600 border-emerald-100" },
+  ],
+  "TERRITORY SALES MANAGER": [
+    { title: "My TSAs", icon: Users, color: "bg-amber-50 text-amber-600 border-amber-100" },
+    { title: "Territory Performance", icon: Target, color: "bg-indigo-50 text-indigo-600 border-indigo-100" },
+    { title: "Active Deals", icon: Zap, color: "bg-cyan-50 text-cyan-600 border-cyan-100" },
+  ],
+  "TERRITORY SALES ASSOCIATE": [
+    { title: "My Pipeline", icon: Briefcase, color: "bg-orange-50 text-orange-600 border-orange-100" },
+    { title: "Client Meetings", icon: CalendarCheck, color: "bg-blue-50 text-blue-600 border-blue-100" },
+    { title: "Monthly Target", icon: Target, color: "bg-emerald-50 text-emerald-600 border-emerald-100" },
   ],
   MANAGER: [
     { title: "Team Members", icon: Users, color: "bg-violet-50 text-violet-600 border-violet-100" },
