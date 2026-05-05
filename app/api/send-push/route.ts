@@ -1,29 +1,14 @@
 import { NextResponse } from "next/server";
+import { getApp } from "@/lib/firebase-admin";
+import { getMessaging } from "firebase-admin/messaging";
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic'; 
 
-const admin = require("firebase-admin");
-
-if (!admin.apps.length) {
-  try {
-    const rawKey = process.env.FIREBASE_PRIVATE_KEY;
-    // This regex handles keys with or without quotes and fixes newline characters
-    const formattedKey = rawKey 
-      ? rawKey.replace(/\\n/g, '\n').replace(/^"(.*)"$/, '$1') 
-      : undefined;
-
-    admin.initializeApp({
-      credential: admin.credential.cert({
-        projectId: "engiconnect-b15c6",
-        clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-        privateKey: formattedKey,
-      }),
-    });
-    console.log("Firebase Admin Initialized");
-  } catch (error: any) {
-    console.error("Firebase Admin Init Error:", error.message);
-  }
+// Lazy getter for messaging - initializes Firebase Admin only when needed
+function getMessagingInstance() {
+  const app = getApp();
+  return getMessaging(app);
 }
 
 export async function POST(request: Request) {
@@ -57,7 +42,8 @@ export async function POST(request: Request) {
     };
 
     // CRITICAL: We MUST await this so Vercel doesn't kill the function early
-    const response = await admin.messaging().sendEachForMulticast(message);
+    const messaging = getMessagingInstance();
+    const response = await messaging.sendEachForMulticast(message);
     
     console.log(`Vercel Push: ${response.successCount} sent, ${response.failureCount} failed`);
 
