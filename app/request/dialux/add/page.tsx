@@ -209,7 +209,7 @@ export default function DialuxRequestWizard() {
       <main className="p-4 md:p-8 max-w-[1450px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* LEFT COLUMN: MULTI-STEP FORM */}
-        <div className="lg:col-span-7 space-y-6">
+        <div className="lg:col-span-12 space-y-12">
           <div className="flex justify-between items-center px-4">
              {["General", "Files", "Technical", "Standard"].map((label, idx) => (
                 <div key={label} className="flex flex-col items-center gap-2">
@@ -363,7 +363,7 @@ export default function DialuxRequestWizard() {
         </div>
 
         {/* RIGHT COLUMN: MONITORING TABLE */}
-        <div className="lg:col-span-5 space-y-6">
+        {/* <div className="lg:col-span-5 space-y-6">
           <Card className="rounded-[2.5rem] border-none shadow-2xl overflow-hidden bg-white min-h-[500px]">
             <CardHeader className="flex flex-row items-center justify-between border-b border-slate-50 bg-slate-50/50 p-6 px-8">
               <CardTitle className="text-[11px] font-black uppercase tracking-[0.2em] flex items-center gap-2 text-slate-500">
@@ -451,7 +451,7 @@ export default function DialuxRequestWizard() {
                 </div>
             </div>
           </Card>
-        </div>
+        </div> */}
       </main>
     </div>
   );

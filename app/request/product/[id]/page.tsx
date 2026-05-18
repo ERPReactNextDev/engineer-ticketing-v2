@@ -1563,8 +1563,8 @@ export default function ProcurementDetailPage() {
                                           </div>
                                           <div className="space-y-1">
                                             <p className="text-sm font-black text-zinc-900">{p.qty} <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest ml-1">Units</span></p>
-                                            <p className="text-[10px] text-zinc-500 font-bold truncate flex items-center gap-1.5">
-                                              <Truck size={10} className="text-zinc-300" /> {p.packaging}
+                                            <p className="text-sm text-zinc-700 font-medium break-words flex items-start gap-1.5">
+                                              <Truck size={10} className="text-zinc-400 mt-0.5 flex-shrink-0" /> {p.packaging}
                                             </p>
                                           </div>
                                         </div>
@@ -1578,9 +1578,9 @@ export default function ProcurementDetailPage() {
                                               </div>
                                               <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Unit Cost (USD)</p>
                                             </div>
-                                            <div className="text-[9px] font-bold text-zinc-400 flex items-center gap-1.5 bg-zinc-50 px-2 py-1 rounded-lg">
-                                              <span className="uppercase tracking-widest opacity-60">PD Orig:</span>
-                                              <span className="font-black text-zinc-600">${parseFloat(p.unitCost || "0").toFixed(2)}</span>
+                                            <div className="text-[11px] font-bold text-zinc-700 flex items-center gap-1.5 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-200">
+                                              <span className="uppercase tracking-widest text-blue-600 font-black">PD Orig:</span>
+                                              <span className="font-black text-blue-700 text-lg">${parseFloat(p.unitCost || "0").toFixed(2)}</span>
                                             </div>
                                           </div>
                                           
