@@ -1589,22 +1589,28 @@ export default function ProcurementDetailPage() {
                                               <span className="text-sm font-black text-blue-500">$</span>
                                             </div>
                                             <Input
-                                              type="number" step="any"
+                                              type="text"
+                                              inputMode="decimal"
                                               placeholder="Update Unit Cost..."
                                               disabled={isLocked}
-                                              value={p.finalUnitCost === "-" || p.finalUnitCost === p.unitCost ? "" : p.finalUnitCost}
-                                              onChange={e => updateCell(rIdx, pIdx, "finalUnitCost", e.target.value || "-")}
+                                              value={p.finalUnitCost === "-" || parseFloat(p.finalUnitCost) === parseFloat(p.unitCost) ? "" : p.finalUnitCost}
+                                              onChange={e => {
+                                                const val = e.target.value;
+                                                if (val === "" || val === "-" || /^\d*\.?\d*$/.test(val)) {
+                                                  updateCell(rIdx, pIdx, "finalUnitCost", val || "-");
+                                                }
+                                              }}
                                               className={cn(
                                                 "h-12 pl-10 pr-12 rounded-2xl font-black text-sm transition-all",
                                                 isLocked 
                                                   ? "bg-zinc-50 border-zinc-200 text-zinc-500" 
-                                                  : (p.finalUnitCost !== "-" && p.finalUnitCost !== p.unitCost)
+                                                  : (p.finalUnitCost !== "-" && parseFloat(p.finalUnitCost) !== parseFloat(p.unitCost))
                                                     ? "bg-blue-50 border-blue-200 ring-2 ring-blue-500/10 focus-visible:ring-blue-500"
                                                     : "bg-white border-zinc-200 hover:border-zinc-300 focus-visible:ring-zinc-900"
                                               )}
                                             />
                                             {/* Reset to PD button */}
-                                            {!isLocked && p.finalUnitCost !== "-" && p.finalUnitCost !== p.unitCost && (
+                                            {!isLocked && p.finalUnitCost !== "-" && parseFloat(p.finalUnitCost) !== parseFloat(p.unitCost) && (
                                               <button
                                                 onClick={() => updateCell(rIdx, pIdx, "finalUnitCost", p.unitCost)}
                                                 className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 rounded-lg bg-white border border-blue-100 text-blue-500 hover:bg-blue-50 transition-colors shadow-sm"
@@ -1706,10 +1712,16 @@ export default function ProcurementDetailPage() {
                                             </div>
                                           ) : (
                                             <Input
-                                              type="number" min={0} step="any"
+                                              type="text"
+                                              inputMode="decimal"
                                               placeholder="e.g. 12500"
                                               value={p.sellingCost === "-" ? "" : p.sellingCost}
-                                              onChange={e => updateCell(rIdx, pIdx, "sellingCost", e.target.value || "-")}
+                                              onChange={e => {
+                                                const val = e.target.value;
+                                                if (val === "" || val === "-" || /^\d*\.?\d*$/.test(val)) {
+                                                  updateCell(rIdx, pIdx, "sellingCost", val || "-");
+                                                }
+                                              }}
                                               className="h-12 rounded-2xl border-zinc-200 bg-blue-50/40 focus-visible:ring-blue-500 font-bold text-sm"
                                             />
                                           )}
@@ -1937,13 +1949,17 @@ export default function ProcurementDetailPage() {
                                                         <span className="text-sm font-black text-white/40">₱</span>
                                                       </div>
                                                       <Input
-                                                        type="number"
+                                                        type="text"
+                                                        inputMode="decimal"
                                                         placeholder="Enter target SRP..."
                                                         className="h-12 pl-8 rounded-2xl bg-white/10 border-white/20 text-white placeholder:text-white/30 font-black text-sm focus-visible:ring-white/40 focus-visible:bg-white/20 transition-all shadow-inner"
                                                         onChange={(e) => {
-                                                          const maxCost = calculateMaxUnitCost(e.target.value, currentCalc);
-                                                          const display = document.getElementById(`max-cost-${calcKey}`);
-                                                          if (display) display.innerText = `$${maxCost.toFixed(2)}`;
+                                                          const val = e.target.value;
+                                                          if (val === "" || /^\d*\.?\d*$/.test(val)) {
+                                                            const maxCost = calculateMaxUnitCost(val, currentCalc);
+                                                            const display = document.getElementById(`max-cost-${calcKey}`);
+                                                            if (display) display.innerText = `$${maxCost.toFixed(2)}`;
+                                                          }
                                                         }}
                                                       />
                                                     </div>
@@ -2566,10 +2582,15 @@ function CalcInput({ label, value, onChange, placeholder = "", icon: Icon, isOve
       </div>
       <div className="relative group">
         <Input
-          type="number"
-          step="any"
+          type="text"
+          inputMode="decimal"
           value={value}
-          onChange={onChange}
+          onChange={(e) => {
+            const val = e.target.value;
+            if (val === "" || /^\d*\.?\d*$/.test(val)) {
+              onChange(e);
+            }
+          }}
           placeholder={placeholder}
           className={cn(
             "h-9 text-[11px] font-bold rounded-xl border-zinc-200 transition-all pl-3",
