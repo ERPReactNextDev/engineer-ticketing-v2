@@ -151,13 +151,17 @@ export function CollaborationHub({
     if (isOpen && messages.length > 0) {
       const markAsSeen = async () => {
         const needsUpdate = messages.some(
-          msg => msg.senderId !== currentUserId && !msg.seenBy?.includes(currentUserId)
+          msg => msg.senderId !== currentUserId && 
+                 !msg.seenBy?.includes(currentUserId) &&
+                 canSeePrivateMessage(msg)
         );
 
         if (needsUpdate) {
           try {
             const updatedMessages = messages.map(msg => {
-              if (msg.senderId !== currentUserId && !msg.seenBy?.includes(currentUserId)) {
+              if (msg.senderId !== currentUserId && 
+                  !msg.seenBy?.includes(currentUserId) &&
+                  canSeePrivateMessage(msg)) {
                 return { ...msg, seenBy: [...(msg.seenBy || []), currentUserId] };
               }
               return msg;
@@ -171,7 +175,7 @@ export function CollaborationHub({
       };
       markAsSeen();
     }
-  }, [isOpen, messages, currentUserId, requestId, collectionName]);
+  }, [isOpen, messages, currentUserId, requestId, collectionName, userDepartment]);
 
   // FEATURE: FETCH USER NAMES FOR SEEN BY
   useEffect(() => {
