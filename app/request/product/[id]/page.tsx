@@ -16,7 +16,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 
-import { db } from "@/lib/firebase";
+import { dbCollab } from "@/lib/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
 import { CollaborationHub } from "@/components/collaboration-hub";
 
@@ -281,10 +281,11 @@ export default function ProcurementDetailPage() {
   const [userId, setUserId] = React.useState<string | null>(null)
   const [userDept, setUserDept] = React.useState("")
 
-  // Collaboration Hub Sync
+  // Collaboration Hub Sync - Use SPF number for chat syncing
   useEffect(() => {
     let unsubscribe: () => void;
-    if (!id || !userId) return;
+    // Wait until we have both the SPF number and userId
+    if (!spfData?.spf_number || !userId) return;
 
     const loadUserAndChat = async () => {
       try {
@@ -297,8 +298,8 @@ export default function ProcurementDetailPage() {
           profilePicture: user.profilePicture || ""
         });
 
-        // Use "spf_creations" collection for collaboration
-        const docRef = doc(db, "spf_creations", id);
+        // Use SPF number as document ID for collaboration (not the offer ID)
+        const docRef = doc(dbCollab, "spf_creations", spfData.spf_number);
         unsubscribe = onSnapshot(docRef, (docSnap) => {
           if (docSnap.exists()) {
             setChatData(docSnap.data());
@@ -311,7 +312,7 @@ export default function ProcurementDetailPage() {
 
     loadUserAndChat();
     return () => unsubscribe?.();
-  }, [id, userId]);
+  }, [spfData?.spf_number, userId]);
 
   React.useEffect(() => {
     const storedId = localStorage.getItem("userId")
@@ -2310,7 +2311,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                   {/* Collaboration Hub */}
                   <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
                     <CollaborationHub
-                      requestId={id}
+                      requestId={spfData?.spf_number || id}
                       collectionName="spf_creations"
                       messages={chatData?.messages || []}
                       currentUserId={userContext.id}
@@ -2319,6 +2320,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                       userRole={userContext.role}
                       status={spfData?.status || "PENDING"}
                       title={spfData?.spf_number || "dsiconnect"}
+                      userDepartment={userDept}
                     />
                   </div>
                 </div>
@@ -2366,7 +2368,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
               {/* Mobile Collaboration Hub */}
               <div className="mt-4 pt-4 border-t border-zinc-100">
                 <CollaborationHub
-                  requestId={id}
+                  requestId={spfData?.spf_number || id}
                   collectionName="spf_creations"
                   messages={chatData?.messages || []}
                   currentUserId={userContext.id}
@@ -2375,6 +2377,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                   userRole={userContext.role}
                   status={spfData?.status || "PENDING"}
                   title={spfData?.spf_number || "dsiconnect"}
+                  userDepartment={userDept}
                 />
               </div>
             </div>

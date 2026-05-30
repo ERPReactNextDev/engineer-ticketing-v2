@@ -6,7 +6,7 @@ import {
   Loader2, Reply, CornerDownRight, ChevronDown, Activity, CheckCircle2,
   Eye, Heart, ThumbsUp, Smile, Lock
 } from "lucide-react";
-import { db } from "@/lib/firebase"; 
+import { dbCollab } from "@/lib/firebase"; 
 import { doc, updateDoc, serverTimestamp, arrayUnion, onSnapshot, setDoc, deleteDoc } from "firebase/firestore";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -107,7 +107,7 @@ export function CollaborationHub({
 
   // FEATURE: TYPING INDICATORS (WRITE)
   useEffect(() => {
-    const typingRef = doc(db, "typing_indicators", `${requestId}_${currentUserId}`);
+    const typingRef = doc(dbCollab, "typing_indicators", `${requestId}_${currentUserId}`);
     if (chatMessage.length > 0) {
       setDoc(typingRef, { userName, updatedAt: serverTimestamp() });
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -126,7 +126,7 @@ export function CollaborationHub({
     if (prevStatus.current !== status && status !== "PENDING") {
       const injectSystemMessage = async () => {
         try {
-          const docRef = doc(db, collectionName, requestId);
+          const docRef = doc(dbCollab, collectionName, requestId);
           await updateDoc(docRef, {
             messages: arrayUnion({
               id: `sys-${Date.now()}`,
@@ -166,7 +166,7 @@ export function CollaborationHub({
               }
               return msg;
             });
-            const docRef = doc(db, collectionName, requestId); 
+            const docRef = doc(dbCollab, collectionName, requestId); 
             await updateDoc(docRef, { messages: updatedMessages });
           } catch (e) {
             console.error("Failed to update seen status", e);
@@ -323,7 +323,7 @@ export function CollaborationHub({
     setReplyingTo(null);
 
     try {
-      const docRef = doc(db, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, requestId); 
       const newMessage: any = {
         id: Math.random().toString(36).substring(2, 11),
         text: content,
@@ -380,7 +380,7 @@ export function CollaborationHub({
 
   const toggleReaction = async (msgId: string, emoji: string) => {
     try {
-      const docRef = doc(db, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, requestId); 
       const updatedMessages = messages.map(m => {
         if (m.id === msgId) {
           const reactions = { ...(m.reactions || {}) };
@@ -401,7 +401,7 @@ export function CollaborationHub({
 
   const toggleResolve = async (msgId: string) => {
     try {
-      const docRef = doc(db, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, requestId); 
       const updatedMessages = messages.map(m => 
         m.id === msgId ? { ...m, isResolved: !m.isResolved } : m
       );
