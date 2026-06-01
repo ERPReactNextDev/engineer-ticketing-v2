@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useRouter } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import ProtectedPageWrapper from "@/components/protected-page-wrapper"
@@ -67,6 +68,7 @@ const EMPTY_ROOM = {
 }
 
 export default function AdminMeetingRoomsPage() {
+  const router = useRouter()
   const [userId, setUserId] = React.useState("")
   const [rooms, setRooms] = React.useState<Room[]>([])
   const [loading, setLoading] = React.useState(true)
