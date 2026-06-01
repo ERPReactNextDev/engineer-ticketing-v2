@@ -77,6 +77,17 @@ export function CollaborationHub({
 }: CollaborationHubProps) {
   // Always use spfNumber as document ID for chat to ensure consistency across all systems
   const effectiveDocId = spfNumber;
+  
+  // Debug logging
+  React.useEffect(() => {
+    console.log('🔵 CollaborationHub mounted:', {
+      requestId,
+      spfNumber,
+      effectiveDocId,
+      collectionName,
+      documentPath: `${collectionName}/${effectiveDocId}`
+    });
+  }, [requestId, spfNumber, effectiveDocId, collectionName]);
   const [chatMessage, setChatMessage] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
