@@ -293,6 +293,7 @@ export default function EngineeringReviewPage() {
 
               <CollaborationHub
                 requestId={params.id}
+                spfNumber={data?.projectName || params.id}
                 collectionName="shop_drawing_requests"
                 messages={data?.messages || []}
                 currentUserId={userContext.id}
