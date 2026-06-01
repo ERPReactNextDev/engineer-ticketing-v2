@@ -2311,7 +2311,8 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                   {/* Collaboration Hub */}
                   <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
                     <CollaborationHub
-                      requestId={spfData?.spf_number || id}
+                      requestId={id}
+                      spfNumber={spfData?.spf_number || id}
                       collectionName="spf_creations"
                       messages={chatData?.messages || []}
                       currentUserId={userContext.id}
@@ -2368,7 +2369,8 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
               {/* Mobile Collaboration Hub */}
               <div className="mt-4 pt-4 border-t border-zinc-100">
                 <CollaborationHub
-                  requestId={spfData?.spf_number || id}
+                  requestId={id}
+                  spfNumber={spfData?.spf_number || id}
                   collectionName="spf_creations"
                   messages={chatData?.messages || []}
                   currentUserId={userContext.id}

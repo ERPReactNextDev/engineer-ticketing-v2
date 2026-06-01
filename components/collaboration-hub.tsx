@@ -50,6 +50,7 @@ interface Message {
 
 interface CollaborationHubProps {
   requestId: string;
+  spfNumber: string;
   collectionName: string;
   messages: Message[];
   currentUserId: string;
@@ -63,6 +64,7 @@ interface CollaborationHubProps {
 
 export function CollaborationHub({
   requestId,
+  spfNumber,
   collectionName,
   messages = [],
   currentUserId,
@@ -73,6 +75,8 @@ export function CollaborationHub({
   title = "dsiconnect",
   userDepartment
 }: CollaborationHubProps) {
+  // Always use spfNumber as document ID for chat to ensure consistency across all systems
+  const effectiveDocId = spfNumber;
   const [chatMessage, setChatMessage] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -107,7 +111,7 @@ export function CollaborationHub({
 
   // FEATURE: TYPING INDICATORS (WRITE)
   useEffect(() => {
-    const typingRef = doc(dbCollab, "typing_indicators", `${requestId}_${currentUserId}`);
+    const typingRef = doc(dbCollab, "typing_indicators", `${effectiveDocId}_${currentUserId}`);
     if (chatMessage.length > 0) {
       setDoc(typingRef, { userName, updatedAt: serverTimestamp() });
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -119,14 +123,14 @@ export function CollaborationHub({
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       deleteDoc(typingRef);
     };
-  }, [chatMessage, requestId, currentUserId, userName]);
+  }, [chatMessage, effectiveDocId, currentUserId, userName]);
 
   // FEATURE: SYSTEM MESSAGES (STATUS CHANGE)
   useEffect(() => {
     if (prevStatus.current !== status && status !== "PENDING") {
       const injectSystemMessage = async () => {
         try {
-          const docRef = doc(dbCollab, collectionName, requestId);
+          const docRef = doc(dbCollab, collectionName, effectiveDocId);
           await updateDoc(docRef, {
             messages: arrayUnion({
               id: `sys-${Date.now()}`,
@@ -144,7 +148,7 @@ export function CollaborationHub({
       injectSystemMessage();
     }
     prevStatus.current = status;
-  }, [status, requestId, collectionName, currentUserId]);
+  }, [status, effectiveDocId, collectionName, currentUserId]);
 
   // FEATURE: MARK MESSAGES AS SEEN
   useEffect(() => {
@@ -166,7 +170,7 @@ export function CollaborationHub({
               }
               return msg;
             });
-            const docRef = doc(dbCollab, collectionName, requestId); 
+            const docRef = doc(dbCollab, collectionName, effectiveDocId); 
             await updateDoc(docRef, { messages: updatedMessages });
           } catch (e) {
             console.error("Failed to update seen status", e);
@@ -175,7 +179,7 @@ export function CollaborationHub({
       };
       markAsSeen();
     }
-  }, [isOpen, messages, currentUserId, requestId, collectionName, userDepartment]);
+  }, [isOpen, messages, currentUserId, effectiveDocId, collectionName, userDepartment]);
 
   // FEATURE: FETCH USER NAMES FOR SEEN BY
   useEffect(() => {
@@ -323,7 +327,7 @@ export function CollaborationHub({
     setReplyingTo(null);
 
     try {
-      const docRef = doc(dbCollab, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
       const newMessage: any = {
         id: Math.random().toString(36).substring(2, 11),
         text: content,
@@ -380,7 +384,7 @@ export function CollaborationHub({
 
   const toggleReaction = async (msgId: string, emoji: string) => {
     try {
-      const docRef = doc(dbCollab, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
       const updatedMessages = messages.map(m => {
         if (m.id === msgId) {
           const reactions = { ...(m.reactions || {}) };
@@ -401,7 +405,7 @@ export function CollaborationHub({
 
   const toggleResolve = async (msgId: string) => {
     try {
-      const docRef = doc(dbCollab, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
       const updatedMessages = messages.map(m => 
         m.id === msgId ? { ...m, isResolved: !m.isResolved } : m
       );
