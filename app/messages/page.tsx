@@ -11,7 +11,7 @@ import {
     Users, Settings2, Package
 } from "lucide-react";
 import { db } from "@/lib/firebase";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ChatMessageListItem from "@/components/chat-message-list-item";
