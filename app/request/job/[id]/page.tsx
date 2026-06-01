@@ -747,6 +747,7 @@ export default function JobDetailsPage() {
 
           <CollaborationHub
             requestId={params.id}
+            spfNumber={data?.projectName || params.id}
             collectionName="job_requests" 
             messages={data?.messages || []}
             currentUserId={userContext.id}

@@ -1,5 +1,5 @@
 "use client"
-
+//test
 import * as React from "react"
 import { useParams, useRouter } from "next/navigation"
 import {
@@ -953,6 +953,7 @@ export default function AppointmentDetailsPage() {
 
                 <CollaborationHub
                     requestId={id}
+                    spfNumber={data?.siteVisitNo || id}
                     collectionName="appointments"
                     messages={data?.messages || []}
                     currentUserId={userContext.id}

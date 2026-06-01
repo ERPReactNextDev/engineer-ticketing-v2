@@ -186,6 +186,7 @@ export default function OtherRequestReviewPage() {
 
             <CollaborationHub
               requestId={params.id}
+              spfNumber={data?.title || params.id}
               collectionName="other_requests" // Explicitly tell it which collection to use
               messages={data?.messages || []}
               currentUserId={userContext.id}

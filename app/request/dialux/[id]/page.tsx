@@ -601,7 +601,8 @@ export default function DialuxRequestReviewPage() {
             </div>
 
             <CollaborationHub 
-              requestId={params.id} 
+              requestId={params.id}
+              spfNumber={data?.projectName || params.id} 
               collectionName="dialux_requests" // Explicitly tell it which collection to use
               messages={data?.messages || []} 
               currentUserId={userContext.id}

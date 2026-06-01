@@ -16,7 +16,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 
-import { db } from "@/lib/firebase";
+import { dbCollab } from "@/lib/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
 import { CollaborationHub } from "@/components/collaboration-hub";
 
@@ -281,10 +281,26 @@ export default function ProcurementDetailPage() {
   const [userId, setUserId] = React.useState<string | null>(null)
   const [userDept, setUserDept] = React.useState("")
 
-  // Collaboration Hub Sync
+  // Collaboration Hub Sync - Use SPF number for chat syncing
   useEffect(() => {
     let unsubscribe: () => void;
-    if (!id || !userId) return;
+    // Wait until we have both the SPF number and userId
+    // IMPORTANT: Only sync when SPF number exists to prevent creating wrong document IDs
+    if (!spfData?.spf_number || !userId) {
+      console.log('⚠️ Collaboration Hub Sync: Waiting for SPF number...', {
+        hasSPFNumber: !!spfData?.spf_number,
+        spfNumber: spfData?.spf_number,
+        hasUserId: !!userId,
+        offerId: id
+      });
+      return;
+    }
+
+    console.log('✅ Collaboration Hub Sync: Starting with SPF number', {
+      spfNumber: spfData.spf_number,
+      offerId: id,
+      documentPath: `spf_creations/${spfData.spf_number}`
+    });
 
     const loadUserAndChat = async () => {
       try {
@@ -297,11 +313,17 @@ export default function ProcurementDetailPage() {
           profilePicture: user.profilePicture || ""
         });
 
-        // Use "spf_creations" collection for collaboration
-        const docRef = doc(db, "spf_creations", id);
+        // CRITICAL: Always use SPF number as document ID for collaboration
+        // This ensures all systems (espiron, taskflow, engiconnect) use the same chat document
+        const docRef = doc(dbCollab, "spf_creations", spfData.spf_number);
+        console.log('📡 Listening to Firebase document:', `spf_creations/${spfData.spf_number}`);
+        
         unsubscribe = onSnapshot(docRef, (docSnap) => {
           if (docSnap.exists()) {
+            console.log('💬 Chat messages received:', docSnap.data().messages?.length || 0);
             setChatData(docSnap.data());
+          } else {
+            console.log('📭 No chat document found yet');
           }
         });
       } catch (err) {
@@ -311,7 +333,7 @@ export default function ProcurementDetailPage() {
 
     loadUserAndChat();
     return () => unsubscribe?.();
-  }, [id, userId]);
+  }, [spfData?.spf_number, userId, id]);
 
   React.useEffect(() => {
     const storedId = localStorage.getItem("userId")
@@ -2307,20 +2329,24 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                     </div>
                   )}
 
-                  {/* Collaboration Hub */}
-                  <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
-                    <CollaborationHub
-                      requestId={id}
-                      collectionName="spf_creations"
-                      messages={chatData?.messages || []}
-                      currentUserId={userContext.id}
-                      userName={userContext.name}
-                      profilePicture={userContext.profilePicture}
-                      userRole={userContext.role}
-                      status={spfData?.status || "PENDING"}
-                      title={spfData?.spf_number || "dsiconnect"}
-                    />
-                  </div>
+                  {/* Collaboration Hub - Only show when SPF number is available */}
+                  {spfData?.spf_number && (
+                    <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
+                      <CollaborationHub
+                        requestId={id}
+                        spfNumber={spfData.spf_number}
+                        collectionName="spf_creations"
+                        messages={chatData?.messages || []}
+                        currentUserId={userContext.id}
+                        userName={userContext.name}
+                        profilePicture={userContext.profilePicture}
+                        userRole={userContext.role}
+                        status={spfData?.status || "PENDING"}
+                        title={spfData.spf_number}
+                        userDepartment={userDept}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2363,20 +2389,24 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                 </div>
               )}
 
-              {/* Mobile Collaboration Hub */}
-              <div className="mt-4 pt-4 border-t border-zinc-100">
-                <CollaborationHub
-                  requestId={id}
-                  collectionName="spf_creations"
-                  messages={chatData?.messages || []}
-                  currentUserId={userContext.id}
-                  userName={userContext.name}
-                  profilePicture={userContext.profilePicture}
-                  userRole={userContext.role}
-                  status={spfData?.status || "PENDING"}
-                  title={spfData?.spf_number || "dsiconnect"}
-                />
-              </div>
+              {/* Mobile Collaboration Hub - Only show when SPF number is available */}
+              {spfData?.spf_number && (
+                <div className="mt-4 pt-4 border-t border-zinc-100">
+                  <CollaborationHub
+                    requestId={id}
+                    spfNumber={spfData.spf_number}
+                    collectionName="spf_creations"
+                    messages={chatData?.messages || []}
+                    currentUserId={userContext.id}
+                    userName={userContext.name}
+                    profilePicture={userContext.profilePicture}
+                    userRole={userContext.role}
+                    status={spfData?.status || "PENDING"}
+                    title={spfData.spf_number}
+                    userDepartment={userDept}
+                  />
+                </div>
+              )}
             </div>
 
           </main>

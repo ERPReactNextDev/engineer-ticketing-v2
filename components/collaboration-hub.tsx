@@ -4,15 +4,16 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import { 
   MessageSquare, Send, X, Minus, Search, ImagePlus, 
   Loader2, Reply, CornerDownRight, ChevronDown, Activity, CheckCircle2,
-  Eye, Heart, ThumbsUp, Smile
+  Eye, Heart, ThumbsUp, Smile, Lock
 } from "lucide-react";
-import { db } from "@/lib/firebase"; 
+import { dbCollab } from "@/lib/firebase"; 
 import { doc, updateDoc, serverTimestamp, arrayUnion, onSnapshot, setDoc, deleteDoc } from "firebase/firestore";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SeenByDialog } from "@/components/seen-by-dialog";
 
 const EngiConnectLogo = () => (
   <div className="flex items-center justify-center size-9 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg rotate-3">
@@ -42,10 +43,14 @@ interface Message {
     senderId?: string;
     originalMsgId?: string; 
   } | null;
+  isPrivate?: boolean;
+  privateRecipientId?: string;
+  privateRecipientName?: string;
 }
 
 interface CollaborationHubProps {
   requestId: string;
+  spfNumber: string;
   collectionName: string;
   messages: Message[];
   currentUserId: string;
@@ -54,10 +59,12 @@ interface CollaborationHubProps {
   userRole: string;
   status: string;
   title?: string;
+  userDepartment?: string;
 }
 
 export function CollaborationHub({
   requestId,
+  spfNumber,
   collectionName,
   messages = [],
   currentUserId,
@@ -65,8 +72,22 @@ export function CollaborationHub({
   profilePicture,
   userRole,
   status,
-  title = "dsiconnect"
+  title = "dsiconnect",
+  userDepartment
 }: CollaborationHubProps) {
+  // Always use spfNumber as document ID for chat to ensure consistency across all systems
+  const effectiveDocId = spfNumber;
+  
+  // Debug logging
+  React.useEffect(() => {
+    console.log('🔵 CollaborationHub mounted:', {
+      requestId,
+      spfNumber,
+      effectiveDocId,
+      collectionName,
+      documentPath: `${collectionName}/${effectiveDocId}`
+    });
+  }, [requestId, spfNumber, effectiveDocId, collectionName]);
   const [chatMessage, setChatMessage] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -75,10 +96,12 @@ export function CollaborationHub({
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [showReplyDialog, setShowReplyDialog] = useState(false);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   
   // New States for Features
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [userNamesMap, setUserNamesMap] = useState<Record<string, { firstName: string; lastName: string; userName: string; profilePicture?: string; department?: string }>>({});
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const unreadRef = useRef<HTMLDivElement>(null);
@@ -99,7 +122,7 @@ export function CollaborationHub({
 
   // FEATURE: TYPING INDICATORS (WRITE)
   useEffect(() => {
-    const typingRef = doc(db, "typing_indicators", `${requestId}_${currentUserId}`);
+    const typingRef = doc(dbCollab, "typing_indicators", `${effectiveDocId}_${currentUserId}`);
     if (chatMessage.length > 0) {
       setDoc(typingRef, { userName, updatedAt: serverTimestamp() });
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -111,14 +134,14 @@ export function CollaborationHub({
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       deleteDoc(typingRef);
     };
-  }, [chatMessage, requestId, currentUserId, userName]);
+  }, [chatMessage, effectiveDocId, currentUserId, userName]);
 
   // FEATURE: SYSTEM MESSAGES (STATUS CHANGE)
   useEffect(() => {
     if (prevStatus.current !== status && status !== "PENDING") {
       const injectSystemMessage = async () => {
         try {
-          const docRef = doc(db, collectionName, requestId);
+          const docRef = doc(dbCollab, collectionName, effectiveDocId);
           await updateDoc(docRef, {
             messages: arrayUnion({
               id: `sys-${Date.now()}`,
@@ -136,24 +159,29 @@ export function CollaborationHub({
       injectSystemMessage();
     }
     prevStatus.current = status;
-  }, [status, requestId, collectionName, currentUserId]);
+  }, [status, effectiveDocId, collectionName, currentUserId]);
 
+  // FEATURE: MARK MESSAGES AS SEEN
   useEffect(() => {
     if (isOpen && messages.length > 0) {
       const markAsSeen = async () => {
         const needsUpdate = messages.some(
-          msg => msg.senderId !== currentUserId && !msg.seenBy?.includes(currentUserId)
+          msg => msg.senderId !== currentUserId && 
+                 !msg.seenBy?.includes(currentUserId) &&
+                 canSeePrivateMessage(msg)
         );
 
         if (needsUpdate) {
           try {
             const updatedMessages = messages.map(msg => {
-              if (msg.senderId !== currentUserId && !msg.seenBy?.includes(currentUserId)) {
+              if (msg.senderId !== currentUserId && 
+                  !msg.seenBy?.includes(currentUserId) &&
+                  canSeePrivateMessage(msg)) {
                 return { ...msg, seenBy: [...(msg.seenBy || []), currentUserId] };
               }
               return msg;
             });
-            const docRef = doc(db, collectionName, requestId); 
+            const docRef = doc(dbCollab, collectionName, effectiveDocId); 
             await updateDoc(docRef, { messages: updatedMessages });
           } catch (e) {
             console.error("Failed to update seen status", e);
@@ -162,7 +190,40 @@ export function CollaborationHub({
       };
       markAsSeen();
     }
-  }, [isOpen, messages, currentUserId, requestId, collectionName]);
+  }, [isOpen, messages, currentUserId, effectiveDocId, collectionName, userDepartment]);
+
+  // FEATURE: FETCH USER NAMES FOR SEEN BY
+  useEffect(() => {
+    const fetchUserNames = async () => {
+      const allSeenByIds = new Set<string>();
+      messages.forEach(msg => {
+        msg.seenBy?.forEach(id => allSeenByIds.add(id));
+      });
+
+      const idsToFetch = Array.from(allSeenByIds).filter(id => !userNamesMap[id]);
+      
+      if (idsToFetch.length > 0) {
+        try {
+          const response = await fetch("/api/get-users-by-ids", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userIds: idsToFetch })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            setUserNamesMap(prev => ({ ...prev, ...data.users }));
+          }
+        } catch (error) {
+          console.error("Failed to fetch user names:", error);
+        }
+      }
+    };
+
+    if (messages.length > 0) {
+      fetchUserNames();
+    }
+  }, [messages, userNamesMap]);
 
   const scrollToMessage = (msgId: string) => {
     const element = document.getElementById(`msg-${msgId}`);
@@ -190,10 +251,27 @@ export function CollaborationHub({
     );
   }, [messages, currentUserId]);
 
+  // Function to check if user can see private messages
+  const canSeePrivateMessage = (msg: Message) => {
+    if (!msg.isPrivate) return true;
+    
+    // Message sender can always see their own private messages
+    if (msg.senderId === currentUserId) return true;
+    
+    // Private message recipient can see it
+    if (msg.privateRecipientId === currentUserId) return true;
+    
+    // IT department can see all private messages
+    if (userDepartment === "IT") return true;
+    
+    return false;
+  };
+
   const filteredMessages = useMemo(() => {
-    if (!searchQuery) return messages;
-    return messages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()));
-  }, [messages, searchQuery]);
+    const visibleMessages = messages.filter(canSeePrivateMessage);
+    if (!searchQuery) return visibleMessages;
+    return visibleMessages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()));
+  }, [messages, searchQuery, currentUserId, userDepartment]);
 
   // FEATURE: MENTION SUPPORT (RENDER LOGIC)
   const renderMessageText = (text: string) => {
@@ -251,7 +329,7 @@ export function CollaborationHub({
     prevMessagesCount.current = messages.length;
   }, [messages, currentUserId, isOpen]);
 
-  const sendChat = async () => {
+  const sendChat = async (isPrivate = false, recipientId?: string, recipientName?: string) => {
     if (!chatMessage.trim() || isSending) return;
     setIsSending(true);
     const content = chatMessage;
@@ -260,49 +338,42 @@ export function CollaborationHub({
     setReplyingTo(null);
 
     try {
-      const docRef = doc(db, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
+      const newMessage: any = {
+        id: Math.random().toString(36).substring(2, 11),
+        text: content,
+        senderId: currentUserId,
+        senderName: userName, 
+        senderImage: profilePicture || "",
+        role: userRole,
+        time: new Date().toISOString(),
+        isResolved: false,
+        seenBy: [currentUserId],
+        reactions: {},
+        replyTo: currentReply ? {
+          text: currentReply.text,
+          senderName: currentReply.senderName,
+          originalMsgId: currentReply.id
+        } : null
+      };
+
+      // Only add private fields if the message is private
+      if (isPrivate) {
+        newMessage.isPrivate = true;
+        newMessage.privateRecipientId = recipientId;
+        newMessage.privateRecipientName = recipientName;
+      }
+
       try {
         await updateDoc(docRef, {
-          messages: arrayUnion({
-            id: Math.random().toString(36).substring(2, 11),
-            text: content,
-            senderId: currentUserId,
-            senderName: userName, 
-            senderImage: profilePicture || "",
-            role: userRole,
-            time: new Date().toISOString(),
-            isResolved: false,
-            seenBy: [currentUserId],
-            reactions: {},
-            replyTo: currentReply ? {
-              text: currentReply.text,
-              senderName: currentReply.senderName,
-              originalMsgId: currentReply.id
-            } : null
-          }),
+          messages: arrayUnion(newMessage),
           updatedAt: serverTimestamp()
         });
       } catch (docError: any) {
         // If document doesn't exist, create it
         if (docError.code === 'not-found') {
           await setDoc(docRef, {
-            messages: [{
-              id: Math.random().toString(36).substring(2, 11),
-              text: content,
-              senderId: currentUserId,
-              senderName: userName, 
-              senderImage: profilePicture || "",
-              role: userRole,
-              time: new Date().toISOString(),
-              isResolved: false,
-              seenBy: [currentUserId],
-              reactions: {},
-              replyTo: currentReply ? {
-                text: currentReply.text,
-                senderName: currentReply.senderName,
-                originalMsgId: currentReply.id
-              } : null
-            }],
+            messages: [newMessage],
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp()
           });
@@ -324,7 +395,7 @@ export function CollaborationHub({
 
   const toggleReaction = async (msgId: string, emoji: string) => {
     try {
-      const docRef = doc(db, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
       const updatedMessages = messages.map(m => {
         if (m.id === msgId) {
           const reactions = { ...(m.reactions || {}) };
@@ -345,7 +416,7 @@ export function CollaborationHub({
 
   const toggleResolve = async (msgId: string) => {
     try {
-      const docRef = doc(db, collectionName, requestId); 
+      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
       const updatedMessages = messages.map(m => 
         m.id === msgId ? { ...m, isResolved: !m.isResolved } : m
       );
@@ -436,7 +507,6 @@ export function CollaborationHub({
                 const isMe = msg.senderId === currentUserId;
                 const isFirstUnread = i === firstUnreadIndex;
                 const isActive = activeMessageId === msg.id;
-                const seenByOthers = msg.seenBy?.filter(id => id !== msg.senderId) || [];
 
                 return (
                   <React.Fragment key={msg.id}>
@@ -500,6 +570,12 @@ export function CollaborationHub({
                             </div>
                           )}
 
+                          {msg.isPrivate && (
+                            <div className="flex items-center gap-1 mb-1 text-[9px] font-black uppercase text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full w-fit">
+                              <Lock size={10} /> Private to {msg.privateRecipientName}
+                            </div>
+                          )}
+
                           {msg.replyTo && (
                             <div 
                               onClick={(e) => {
@@ -528,12 +604,12 @@ export function CollaborationHub({
 
                           <div className={cn("flex items-center justify-end gap-1 text-[9px] mt-1 opacity-60 font-medium", isMe ? "text-blue-100" : "text-slate-400")}>
                             {new Date(msg.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            {isMe && seenByOthers.length > 0 && (
-                              <div className="flex items-center gap-0.5 ml-1">
-                                <Eye size={10} />
-                                <span>{seenByOthers.length}</span>
-                              </div>
-                            )}
+                            <SeenByDialog 
+                              seenByIds={msg.seenBy || []}
+                              userNamesMap={userNamesMap}
+                              isMe={isMe}
+                              currentUserId={currentUserId}
+                            />
                           </div>
                         </div>
                       </div>
@@ -565,7 +641,63 @@ export function CollaborationHub({
                 </div>
               )}
 
-              {replyingTo && (
+              {/* Reply Mode Dialog - Inside Chat */}
+              {showReplyDialog && replyingTo && (
+                <div className="mb-3 bg-white rounded-2xl border-2 border-slate-200 shadow-lg p-4 animate-in slide-in-from-bottom-2">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold text-slate-800">Reply to Message</h3>
+                    <button 
+                      onClick={() => {
+                        setShowReplyDialog(false);
+                        setReplyingTo(null);
+                      }}
+                      className="text-slate-400 hover:text-slate-600"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                  
+                  <div className="mb-3 p-3 bg-slate-50 rounded-xl border-l-4 border-slate-300">
+                    <p className="text-xs font-medium text-slate-700">{replyingTo.senderName}</p>
+                    <p className="text-xs text-slate-600 italic line-clamp-2">"{replyingTo.text}"</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => {
+                        if (!chatMessage.trim()) {
+                          toast.error("Please type a message first");
+                          return;
+                        }
+                        setShowReplyDialog(false);
+                        sendChat();
+                      }}
+                      disabled={!chatMessage.trim()}
+                      className="w-full p-3 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-colors text-sm"
+                    >
+                      Reply Publicly
+                    </button>
+                    
+                    <button
+                      onClick={() => {
+                        if (!chatMessage.trim()) {
+                          toast.error("Please type a message first");
+                          return;
+                        }
+                        setShowReplyDialog(false);
+                        sendChat(true, replyingTo.senderId, replyingTo.senderName);
+                      }}
+                      disabled={!chatMessage.trim()}
+                      className="w-full p-3 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-xl font-medium transition-colors flex items-center justify-center gap-2 text-sm"
+                    >
+                      <Lock size={16} />
+                      Reply Privately
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {replyingTo && !showReplyDialog && (
                 <div className="mb-3 p-2 bg-blue-50 rounded-xl flex items-center justify-between border-l-4 border-blue-500 animate-in slide-in-from-bottom-2">
                   <div className="flex items-center gap-2 overflow-hidden text-[11px]">
                     <CornerDownRight size={14} className="text-blue-500 shrink-0" />
@@ -590,11 +722,25 @@ export function CollaborationHub({
                     value={chatMessage} 
                     disabled={isSending}
                     onChange={(e) => setChatMessage(e.target.value)} 
-                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendChat()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        if (replyingTo && chatMessage.trim()) {
+                          setShowReplyDialog(true);
+                        } else {
+                          sendChat();
+                        }
+                      }
+                    }}
                   />
                   <Button 
                     size="icon" 
-                    onClick={() => sendChat()} 
+                    onClick={() => {
+                      if (replyingTo && chatMessage.trim()) {
+                        setShowReplyDialog(true);
+                      } else {
+                        sendChat();
+                      }
+                    }} 
                     disabled={!chatMessage.trim() || isSending} 
                     className="bg-blue-600 hover:bg-blue-700 h-11 w-11 rounded-2xl shadow-lg transition-all active:scale-95"
                   >
@@ -613,3 +759,7 @@ export function CollaborationHub({
     </div>
   );
 }
+
+
+
+
