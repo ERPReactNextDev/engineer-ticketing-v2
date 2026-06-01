@@ -282,7 +282,7 @@ function CalendarView({ visits, currentMonth, onMonthChange, router, staffNames 
       </div>
 
       <div className="grid grid-cols-7 border-b border-zinc-100">
-        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d: any) => (
           <div key={d} className="py-3 text-center text-[10px] font-black text-zinc-400 uppercase tracking-widest bg-zinc-50/50">{d}</div>
         ))}
       </div>
@@ -688,8 +688,8 @@ export default function SiteVisitListPage() {
       q = query(baseCollection, where("submittedBy", "==", user.id), orderBy("createdAt", "desc"));
     }
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      let liveData = snapshot.docs.map(doc => {
+    const unsubscribe = onSnapshot(q, (snapshot: any) => {
+      let liveData = snapshot.docs.map((doc: any) => {
         const data = doc.data()
         const rawDate = data.appointmentDate?.toDate ? data.appointmentDate.toDate() : new Date()
         
@@ -735,45 +735,20 @@ export default function SiteVisitListPage() {
         }
       })
 
-      // DEBUG: Log ID information to diagnose filtering issues
-      console.log("[SiteVisit Debug] User ID:", user.id);
-      console.log("[SiteVisit Debug] Subordinate IDs:", subordinateIds);
-      console.log("[SiteVisit Debug] Total records from Firestore:", liveData.length);
-      console.log("[SiteVisit Debug] Sample data:", liveData.slice(0, 3).map(v => ({ 
-        id: v.id, 
-        site: v.site, 
-        type: v.type
-      })));
-      
-      // DEBUG: Log TSA/TSM/Manager lookup results
-      console.log("[SiteVisit Debug] allStaff count:", allStaff.length);
-      console.log("[SiteVisit Debug] Sample lookups:", liveData.slice(0, 3).map(v => ({
-        submittedBy: v.submittedBy,
-        tsaName: v.tsaName,
-        tsm: v.tsm,
-        tsmName: v.tsmName,
-        manager: v.salesHead,
-        managerName: v.managerName
-      })));
-      
       // Client-side filtering for non-admin users
       if (!hasGlobalAccess) {
         if (isTSM || isManager) {
             // TSM and MANAGER can see their own AND all their subordinate visits
-            liveData = liveData.filter(v => {
+            liveData = liveData.filter((v: any) => {
                 const match = v.submittedBy === user.id || subordinateIds.includes(v.submittedBy);
-                if (!match) {
-                    console.log(`[SiteVisit Debug] Filtered out - submittedBy: "${v.submittedBy}" !== user.id: "${user.id}", not in subordinates`);
-                }
                 return match;
             });
         } else {
             // TSA and other Members ONLY see their own visits
-            liveData = liveData.filter(v => v.submittedBy === user.id);
+            liveData = liveData.filter((v: any) => v.submittedBy === user.id);
         }
       }
       
-      console.log("[SiteVisit Debug] Records after filtering:", liveData.length);
       setVisits(liveData)
       setIsDataLoading(false)
     }, (error) => {
@@ -785,7 +760,7 @@ export default function SiteVisitListPage() {
   }, [user, isUserLoading, subordinateIds])
 
   const filteredVisits = React.useMemo(() => {
-    return visits.filter(v => {
+    return visits.filter((v: any) => {
       const s = `${v.site} ${v.id} ${v.tech} ${v.type} ${v.siteVisitNo || ""}`.toLowerCase()
       const matchesSearch = s.includes(searchQuery.toLowerCase())
       const matchesStatus = selectedStatus ? v.status === selectedStatus : true
@@ -797,7 +772,7 @@ export default function SiteVisitListPage() {
   // Re-resolve protocol names when allProtocols is loaded/updated
   React.useEffect(() => {
     if (visits.length > 0 && Object.keys(allProtocols).length > 0) {
-      setVisits(prevVisits => prevVisits.map(v => ({
+      setVisits(prevVisits => prevVisits.map((v: any) => ({
         ...v,
         type: resolveProtocolNames(v.rawProtocols || v.protocols)
       })))
@@ -815,9 +790,9 @@ export default function SiteVisitListPage() {
 
   const counts = {
     all: visits.length,
-    pending: visits.filter(v => v.status === "PENDING").length,
-    confirmed: visits.filter(v => v.status === "CONFIRMED").length,
-    completed: visits.filter(v => v.status === "COMPLETED").length,
+    pending: visits.filter((v: any) => v.status === "PENDING").length,
+    confirmed: visits.filter((v: any) => v.status === "CONFIRMED").length,
+    completed: visits.filter((v: any) => v.status === "COMPLETED").length,
   }
 
   return (

@@ -84,8 +84,8 @@ export default function AdminMeetingRoomsPage() {
   React.useEffect(() => {
     setUserId(localStorage.getItem("userId") || "")
     const q = query(collection(db, "meeting_rooms"), orderBy("name", "asc"))
-    const unsub = onSnapshot(q, snap => {
-      setRooms(snap.docs.map(d => ({ id: d.id, ...d.data() } as Room)))
+    const unsub = onSnapshot(q, (snap: any) => {
+      setRooms(snap.docs.map((d: any) => ({ id: d.id, ...d.data() } as Room)))
       setLoading(false)
     })
     return () => unsub()

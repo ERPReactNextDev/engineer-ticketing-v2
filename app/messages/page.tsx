@@ -169,10 +169,10 @@ function MessagesContent() {
                 q = query(collection(db, coll.id), where("submittedBy", "==", userId)) as any;
             }
 
-            return onSnapshot(q, (snapshot) => {
+            return onSnapshot(q, (snapshot: any) => {
                 setAllRequests(prev => {
                     const others = prev.filter(p => p.sourceCollection !== coll.id);
-                    let current = snapshot.docs.map(d => {
+                    let current = snapshot.docs.map((d: any) => {
                         const data = d.data();
                         const unreadCount = (data.messages || []).filter((m: any) => 
                             m.senderId !== userId && !m.seenBy?.includes(userId)

@@ -514,8 +514,8 @@ export default function JobRequestManagementPage() {
             q = query(collection(db, "job_requests"), where("submittedBy", "==", user.id), orderBy("createdAt", "desc"))
         }
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const liveData = snapshot.docs.map(doc => {
+        const unsubscribe = onSnapshot(q, (snapshot: any) => {
+            const liveData = snapshot.docs.map((doc: any) => {
                 const data = doc.data()
                 return {
                     id: doc.id.slice(-6).toUpperCase(),

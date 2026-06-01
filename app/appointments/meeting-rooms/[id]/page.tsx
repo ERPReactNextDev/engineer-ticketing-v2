@@ -94,7 +94,7 @@ export default function BookingDetailPage() {
       where("roomId", "==", data.roomId),
       where("status", "in", ["PENDING", "CONFIRMED"])
     )).then(snap => {
-      setRoomBookings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      setRoomBookings(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })))
     }).catch(console.error)
   }, [showReschedule, data?.roomId])
 

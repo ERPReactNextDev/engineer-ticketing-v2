@@ -427,8 +427,8 @@ export default function DialuxManagementPage() {
             q = query(collection(db, "dialux_requests"), where("submittedBy", "==", user.id), orderBy("createdAt", "desc"))
         }
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            let liveData = snapshot.docs.map(doc => {
+        const unsubscribe = onSnapshot(q, (snapshot: any) => {
+            let liveData = snapshot.docs.map((doc: any) => {
                 const data = doc.data()
                 return {
                     id: doc.id,

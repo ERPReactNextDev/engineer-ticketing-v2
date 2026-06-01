@@ -147,7 +147,7 @@ export default function ScheduleBookingPage() {
       where("roomId", "==", formData.roomId),
       where("status", "in", ["PENDING", "CONFIRMED"])
     )).then(snap => {
-      setExistingBookings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      setExistingBookings(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })))
     }).catch(err => {
       console.error("Bookings fetch error:", err)
       // Fallback: fetch all bookings for this room without status filter
@@ -155,7 +155,7 @@ export default function ScheduleBookingPage() {
         .then(snap => {
           setExistingBookings(
             snap.docs
-              .map(d => ({ id: d.id, ...d.data() }))
+              .map((d: any) => ({ id: d.id, ...d.data() }))
               .filter((b: any) => ["PENDING", "CONFIRMED"].includes(b.status))
           )
         }).catch(console.error)
@@ -381,7 +381,7 @@ export default function ScheduleBookingPage() {
                   </div>
                 </div>
                 <div className="grid grid-cols-7 border-b border-zinc-100 bg-zinc-50/50">
-                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => (
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d: any) => (
                     <div key={d} className="py-2 text-center text-[9px] font-black text-zinc-400 uppercase tracking-widest">{d}</div>
                   ))}
                 </div>

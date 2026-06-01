@@ -92,7 +92,7 @@ export default function MeetingRoomsPage() {
     const unsub = onSnapshot(q,
       snap => {
         const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
+          .map((d: any) => ({ id: d.id, ...d.data() }))
           .sort((a: any, b: any) => {
             const ta = a.createdAt?.toMillis?.() || 0
             const tb = b.createdAt?.toMillis?.() || 0
@@ -452,7 +452,7 @@ function CalendarView({ bookings, currentMonth, onMonthChange, router }: any) {
         </div>
       </div>
       <div className="grid grid-cols-7 border-b border-zinc-100 bg-zinc-50/50">
-        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => (
+        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d: any) => (
           <div key={d} className="py-2 text-center text-[9px] font-black text-zinc-400 uppercase tracking-widest">{d}</div>
         ))}
       </div>

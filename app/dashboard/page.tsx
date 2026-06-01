@@ -561,7 +561,7 @@ function AdminDashboard({ router, userId }: { router: any; userId: string | null
                 const { getDocs, collection } = await import("firebase/firestore")
                 const { db } = await import("@/lib/firebase")
                 const snap = await getDocs(collection(db, "meeting_rooms"))
-                setRooms(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((r: any) => r.isActive !== false))
+                setRooms(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })).filter((r: any) => r.isActive !== false))
             } catch (e) { console.error(e) }
         }
         fetchRooms()
@@ -575,7 +575,7 @@ function AdminDashboard({ router, userId }: { router: any; userId: string | null
                 const { db } = await import("@/lib/firebase")
                 const q = query(collection(db, "room_bookings"), where("status", "in", ["PENDING", "CONFIRMED"]))
                 const unsub = onSnapshot(q, snap => {
-                    setBookings(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+                    setBookings(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })))
                     setLoading(false)
                 }, err => {
                     console.error(err)
@@ -881,7 +881,7 @@ function DashboardCalendar({ scheduleData, router }: { scheduleData: any; router
                 </div>
             </div>
             <div className="grid grid-cols-7 border-b border-gray-50 bg-gray-50/50">
-                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => (
+                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d: any) => (
                     <div key={d} className="py-2 text-center text-[9px] font-black text-gray-400 uppercase tracking-widest">{d}</div>
                 ))}
             </div>
@@ -1069,7 +1069,7 @@ export default function EngiconnectDashboard() {
         // Permissions are stable during a session; a persistent listener was re-firing on every
         // permission change system-wide and downloading all docs to every connected client.
         getDocs(collection(db, "role_permissions")).then(snap => {
-            const allPerms = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            const allPerms = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
             setDynamicPermissions(allPerms)
             if (storedUserId) {
                 const roleKey = localStorage.getItem("userRole")?.toUpperCase() || "MEMBER"
@@ -1148,7 +1148,7 @@ export default function EngiconnectDashboard() {
                 : query(collection(db, "appointments"), where("submittedBy", "==", userId))
 
         const unsubSite = onSnapshot(siteQuery, snap => {
-            let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            let docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
             const isEngSV = userDept === "ENGINEERING" || userDept === "IT"; const isSalesSV = userDept === "SALES"; const isMgrSV = ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole)
             const pending = docs.filter((d: any) => {
                 const s = (d.status || "").toUpperCase(); if (["COMPLETED", "CANCELLED", "DONE"].includes(s)) return false
@@ -1167,7 +1167,7 @@ export default function EngiconnectDashboard() {
                 : query(collection(db, "shop_drawing_requests"), where("submittedBy", "==", userId))
 
         const unsubShop = onSnapshot(shopQuery, snap => {
-            let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            let docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
             const isEngSD = userDept === "ENGINEERING" || userDept === "IT"; const isSalesSD = userDept === "SALES"; const isMgrSD = ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole)
             const pending = docs.filter((d: any) => {
                 const s = (d.status || "").toUpperCase(); if (["COMPLETED", "CANCELLED", "DONE", "RELEASED"].includes(s)) return false
@@ -1185,7 +1185,7 @@ export default function EngiconnectDashboard() {
                 : query(collection(db, "job_requests"), where("submittedBy", "==", userId))
 
         const unsubJob = onSnapshot(jobQuery, snap => {
-            let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            let docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
             const isEngJR = userDept === "ENGINEERING" || userDept === "IT"; const isSalesJR = userDept === "SALES"; const isMgrJR = ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole)
             const pending = docs.filter((d: any) => {
                 const s = (d.status || "").toUpperCase(); if (["COMPLETED", "CANCELLED", "DONE"].includes(s)) return false
@@ -1204,7 +1204,7 @@ export default function EngiconnectDashboard() {
                 : query(collection(db, "other_requests"), where("submittedBy", "==", userId))
 
         const unsubOther = onSnapshot(otherQuery, snap => {
-            let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            let docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
             const isEngOR = userDept === "ENGINEERING" || userDept === "IT"; const isProcOR = userDept === "PROCUREMENT"; const isMgrOR = ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole)
             const pending = docs.filter((d: any) => {
                 const s = (d.status || "").toUpperCase(); if (["COMPLETED", "CANCELLED", "DONE", "RELEASED"].includes(s)) return false
@@ -1222,7 +1222,7 @@ export default function EngiconnectDashboard() {
                 : query(collection(db, "dialux_requests"), where("submittedBy", "==", userId))
 
         const unsubDialux = onSnapshot(dialuxQuery, snap => {
-            let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            let docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
             docs = docs.map((d: any) => ({ ...d, submittedBy: d.submittedBy || d.createdBy || d.userId }))
             const isEngineering = userDept === "ENGINEERING" || userDept === "IT"; const isSales = userDept === "SALES"; const isManager = ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole)
             const pending = docs.filter((d: any) => {
@@ -1244,7 +1244,7 @@ export default function EngiconnectDashboard() {
                 : query(collection(db, "testing_tracker"), where("submittedBy", "==", userId))
 
         const unsubTesting = onSnapshot(testingQuery, snap => {
-            let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+            let docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
             let active = 0; let overdue = 0; const today = new Date(); const myItems: any[] = []
             docs.forEach((d: any) => {
                 if (!d.releaseDate) { const target = d.targetDate?.toDate(); if (target && isAfter(today, target)) overdue++; else if (d.arrivalDate) active++ }
@@ -1331,7 +1331,7 @@ export default function EngiconnectDashboard() {
                 : query(collection(db, "testing_tracker"), where("submittedBy", "==", userId), orderBy("targetDate", "asc"), limit(50))
         const unsubApps = onSnapshot(qApps, snap => {
             const today = new Date(); today.setHours(0, 0, 0, 0); const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
-            let apps = snap.docs.map(doc => { const data = doc.data(); return { id: doc.id, type: "Site Visit", date: data.appointmentDate?.toDate(), title: data.client || "Untitled Visit", ...data } }).filter(a => a.date)
+            let apps = snap.docs.map((doc: any) => { const data = doc.data(); return { id: doc.id, type: "Site Visit", date: data.appointmentDate?.toDate(), title: data.client || "Untitled Visit", ...data } }).filter(a => a.date)
             setScheduleData(prev => {
                 const combined = [...apps, ...prev.upcoming.filter(i => i.type === "Testing")].sort((a, b) => a.date.getTime() - b.date.getTime())
                 const todayItems = combined.filter(i => i.date >= today && i.date < tomorrow); const upcomingItems = combined.filter(i => i.date >= tomorrow); const nextItem = combined.find(i => i.date >= new Date()) || null
@@ -1340,7 +1340,7 @@ export default function EngiconnectDashboard() {
         })
         const unsubTesting = onSnapshot(qTesting, snap => {
             const today = new Date(); today.setHours(0, 0, 0, 0); const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1)
-            let items = snap.docs.map(doc => { const data = doc.data(); return { id: doc.id, type: "Testing", date: data.targetDate?.toDate(), title: data.productName || "Untitled Product", releaseDate: data.releaseDate, ...data } }).filter(a => a.date && !a.releaseDate)
+            let items = snap.docs.map((doc: any) => { const data = doc.data(); return { id: doc.id, type: "Testing", date: data.targetDate?.toDate(), title: data.productName || "Untitled Product", releaseDate: data.releaseDate, ...data } }).filter(a => a.date && !a.releaseDate)
             setScheduleData(prev => {
                 const combined = [...items, ...prev.today.filter(i => i.type === "Site Visit"), ...prev.upcoming.filter(i => i.type === "Site Visit")].sort((a, b) => a.date.getTime() - b.date.getTime())
                 const todayItems = combined.filter(i => i.date >= today && i.date < tomorrow); const upcomingItems = combined.filter(i => i.date >= tomorrow); const nextItem = combined.find(i => i.date >= new Date()) || null

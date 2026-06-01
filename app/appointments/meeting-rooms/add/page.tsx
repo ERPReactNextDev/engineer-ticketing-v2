@@ -58,7 +58,7 @@ export default function SelectRoomPage() {
       try {
         const snap = await getDocs(collection(db, "meeting_rooms"))
         const data = snap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
+          .map((d: any) => ({ id: d.id, ...d.data() }))
           .filter((r: any) => r.isActive !== false)
           .sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""))
         setRooms(data)
@@ -72,7 +72,7 @@ export default function SelectRoomPage() {
           w("status", "in", ["PENDING", "CONFIRMED"])
         ))
         const todayBookings = bookSnap.docs
-          .map(d => ({ id: d.id, ...d.data() }))
+          .map((d: any) => ({ id: d.id, ...d.data() }))
           .filter((b: any) => {
             const bd = b.bookingDate?.toDate ? b.bookingDate.toDate() : null
             return bd && bd >= today && bd < tomorrow

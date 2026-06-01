@@ -367,7 +367,7 @@ function PermissionSection({
         if (!q) return section.items
         return section.items.filter(item => item.label.toLowerCase().includes(q))
     }, [query, section.items])
-    const enabledVisible = visibleItems.filter(i => perms[i.key]).length
+    const enabledVisible = visibleItems.filter((i: any) => perms[i.key]).length
 
     React.useEffect(() => {
         setCollapsed(collapsedByDefault)

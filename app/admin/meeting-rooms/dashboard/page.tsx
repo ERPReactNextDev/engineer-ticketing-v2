@@ -32,8 +32,8 @@ export default function MeetingRoomDashboardPage() {
           getDocs(collection(db, "room_bookings")),
           getDocs(collection(db, "meeting_rooms")),
         ])
-        setBookings(bookSnap.docs.map(d => ({ id: d.id, ...d.data() })))
-        setRooms(roomSnap.docs.map(d => ({ id: d.id, ...d.data() })))
+        setBookings(bookSnap.docs.map((d: any) => ({ id: d.id, ...d.data() })))
+        setRooms(roomSnap.docs.map((d: any) => ({ id: d.id, ...d.data() })))
       } catch (e) {
         toast.error("Failed to load data")
       } finally {
