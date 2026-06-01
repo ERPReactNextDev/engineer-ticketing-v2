@@ -285,6 +285,7 @@ export default function ProcurementDetailPage() {
   useEffect(() => {
     let unsubscribe: () => void;
     // Wait until we have both the SPF number and userId
+    // IMPORTANT: Only sync when SPF number exists to prevent creating wrong document IDs
     if (!spfData?.spf_number || !userId) return;
 
     const loadUserAndChat = async () => {
@@ -298,7 +299,8 @@ export default function ProcurementDetailPage() {
           profilePicture: user.profilePicture || ""
         });
 
-        // Use SPF number as document ID for collaboration (not the offer ID)
+        // CRITICAL: Always use SPF number as document ID for collaboration
+        // This ensures all systems (espiron, taskflow, engiconnect) use the same chat document
         const docRef = doc(dbCollab, "spf_creations", spfData.spf_number);
         unsubscribe = onSnapshot(docRef, (docSnap) => {
           if (docSnap.exists()) {
@@ -2308,22 +2310,24 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                     </div>
                   )}
 
-                  {/* Collaboration Hub */}
-                  <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
-                    <CollaborationHub
-                      requestId={id}
-                      spfNumber={spfData?.spf_number || id}
-                      collectionName="spf_creations"
-                      messages={chatData?.messages || []}
-                      currentUserId={userContext.id}
-                      userName={userContext.name}
-                      profilePicture={userContext.profilePicture}
-                      userRole={userContext.role}
-                      status={spfData?.status || "PENDING"}
-                      title={spfData?.spf_number || "dsiconnect"}
-                      userDepartment={userDept}
-                    />
-                  </div>
+                  {/* Collaboration Hub - Only show when SPF number is available */}
+                  {spfData?.spf_number && (
+                    <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
+                      <CollaborationHub
+                        requestId={id}
+                        spfNumber={spfData.spf_number}
+                        collectionName="spf_creations"
+                        messages={chatData?.messages || []}
+                        currentUserId={userContext.id}
+                        userName={userContext.name}
+                        profilePicture={userContext.profilePicture}
+                        userRole={userContext.role}
+                        status={spfData?.status || "PENDING"}
+                        title={spfData.spf_number}
+                        userDepartment={userDept}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2366,22 +2370,24 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                 </div>
               )}
 
-              {/* Mobile Collaboration Hub */}
-              <div className="mt-4 pt-4 border-t border-zinc-100">
-                <CollaborationHub
-                  requestId={id}
-                  spfNumber={spfData?.spf_number || id}
-                  collectionName="spf_creations"
-                  messages={chatData?.messages || []}
-                  currentUserId={userContext.id}
-                  userName={userContext.name}
-                  profilePicture={userContext.profilePicture}
-                  userRole={userContext.role}
-                  status={spfData?.status || "PENDING"}
-                  title={spfData?.spf_number || "dsiconnect"}
-                  userDepartment={userDept}
-                />
-              </div>
+              {/* Mobile Collaboration Hub - Only show when SPF number is available */}
+              {spfData?.spf_number && (
+                <div className="mt-4 pt-4 border-t border-zinc-100">
+                  <CollaborationHub
+                    requestId={id}
+                    spfNumber={spfData.spf_number}
+                    collectionName="spf_creations"
+                    messages={chatData?.messages || []}
+                    currentUserId={userContext.id}
+                    userName={userContext.name}
+                    profilePicture={userContext.profilePicture}
+                    userRole={userContext.role}
+                    status={spfData?.status || "PENDING"}
+                    title={spfData.spf_number}
+                    userDepartment={userDept}
+                  />
+                </div>
+              )}
             </div>
 
           </main>

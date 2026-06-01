@@ -24,6 +24,7 @@ const logsConfig = {
 };
 
 // --- COLLAB PROJECT CONFIG (For EngiConnect Chat) ---
+// Use the same Firebase project as main since engiconnect owns the collab database
 const collabConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
