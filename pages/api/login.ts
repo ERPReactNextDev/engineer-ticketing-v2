@@ -98,7 +98,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const allowedDepartments = ["IT", "Sales", "Engineering", "Procurement", "Warehouse Operations"];
+    const allowedDepartments = ["IT", "Sales", "Engineering", "Procurement", "Warehouse Operations","Admin"];
     if (!allowedDepartments.includes(user.Department)) {
       return res.status(403).json({ message: "Access denied: Unauthorized Department." });
     }

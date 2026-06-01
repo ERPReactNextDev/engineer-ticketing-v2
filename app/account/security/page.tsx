@@ -21,7 +21,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { AppSidebar } from "@/components/app-sidebar"
 import ProtectedPageWrapper from "@/components/protected-page-wrapper"
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot } from "firebase/firestore"
+import { doc, getDoc, onSnapshot } from "firebase/firestore"
 
 import {
   Dialog, DialogContent, DialogDescription,
@@ -165,11 +165,21 @@ export default function SecurityPage() {
     const role = localStorage.getItem("userRole")       || "MEMBER"
     if (!dept || !role) return
     const targetId = `${dept.toUpperCase().trim()}_${role.toUpperCase().trim()}`
-    const unsub = onSnapshot(collection(db, "role_permissions"), snap => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]
-      const raw  = docs.find((p: any) => p.id === targetId)
-                || docs.find((p: any) => p.id.endsWith(`_${role.toUpperCase().trim()}`))
-      if (raw?.security) setSecPerms(prev => ({ ...prev, ...raw.security }))
+    // Use onSnapshot on the specific document — not the whole collection
+    const unsub = onSnapshot(doc(db, "role_permissions", targetId), (snap) => {
+      if (snap.exists()) {
+        const raw = snap.data()
+        if (raw?.security) setSecPerms(prev => ({ ...prev, ...raw.security }))
+      } else {
+        // Fallback: try matching by role suffix only
+        const fallbackId = `_${role.toUpperCase().trim()}`
+        getDoc(doc(db, "role_permissions", fallbackId)).then(fallbackSnap => {
+          if (fallbackSnap.exists()) {
+            const raw = fallbackSnap.data()
+            if (raw?.security) setSecPerms(prev => ({ ...prev, ...raw.security }))
+          }
+        }).catch(() => {})
+      }
     })
     return () => unsub()
   }, [])

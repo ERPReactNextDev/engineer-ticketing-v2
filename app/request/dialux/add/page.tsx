@@ -61,18 +61,8 @@ export default function DialuxRequestWizard() {
   useEffect(() => {
     const storedId = typeof window !== 'undefined' ? localStorage.getItem("userId") : null;
     setUserId(storedId);
-
-    const q = query(collection(db, "dialux_requests"), orderBy("createdAt", "desc"), limit(6));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as QueueItem[];
-      setQueue(docs);
-      setStats({
-        total: docs.length,
-        inProgress: docs.filter((d) => d.status === "ON GOING").length,
-        pending: docs.filter((d) => d.status === "PENDING" || d.status === "ON QUEUE").length
-      });
-    });
-    return () => unsubscribe();
+    // NOTE: Queue monitoring panel is currently hidden (commented out in JSX).
+    // Removed the onSnapshot listener here to avoid unnecessary Firestore reads.
   }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'plotting' | 'photo') => {

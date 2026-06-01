@@ -33,7 +33,7 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Checkbox } from "@/components/ui/checkbox"
 
 // CUSTOM COMPONENTS
 import { PageHeader } from "@/components/page-header"
@@ -171,7 +171,9 @@ export default function ProtocolRegistryPage() {
                               <span className="text-sm font-black uppercase italic tracking-tight text-[#121212]">{p.label}</span>
                               <span className="text-[10px] font-mono font-bold text-black/40 uppercase">
                                 <UserCheck className="inline size-2.5 mr-1 mb-0.5" />
-                                {p.pic || "UNASSIGNED"}
+                                {Array.isArray(p.pic) 
+                                    ? p.pic.join(", ") 
+                                    : (p.pic || "UNASSIGNED")}
                               </span>
                           </div>
                         </TableCell>
@@ -216,38 +218,45 @@ export default function ProtocolRegistryPage() {
 function ProtocolModalContent({ setIsOpen, initialData, onDelete }: any) {
     const [label, setLabel] = React.useState("")
     const [desc, setDesc] = React.useState("")
-    const [pic, setPic] = React.useState("")
+    const [pics, setPics] = React.useState<string[]>([])
     const [isActive, setIsActive] = React.useState(true)
     const [isSubmitting, setIsSubmitting] = React.useState(false)
     const [engineers, setEngineers] = React.useState<any[]>([])
 
-    // FETCH ENGINEERS ONLY (ENGINEERING DEPT FILTER)
+    // FETCH ENGINEERS ONLY — one-time getDocs with server-side dept filter
     React.useEffect(() => {
-      const q = query(collection(db, "staff"), orderBy("Firstname", "asc"));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const staffList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        const filtered = staffList.filter((s: any) => s.Department?.toLowerCase() === "engineering");
-        setEngineers(filtered);
-      });
-      return () => unsubscribe();
+      const fetchEngineers = async () => {
+        try {
+          const { getDocs, where } = await import("firebase/firestore");
+          const q = query(collection(db, "staff"), where("Department", "==", "engineering"), orderBy("Firstname", "asc"));
+          const snapshot = await getDocs(q);
+          const filtered = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setEngineers(filtered);
+        } catch (e) { console.error("Engineers fetch error:", e); }
+      };
+      fetchEngineers();
     }, []);
 
     React.useEffect(() => {
       if (initialData) {
         setLabel(initialData.label || "");
         setDesc(initialData.desc || "");
-        setPic(initialData.pic || "");
+        // Handle both single string PIC and array PIC
+        const initialPics = initialData.pic 
+          ? (Array.isArray(initialData.pic) ? initialData.pic : [initialData.pic])
+          : [];
+        setPics(initialPics);
         setIsActive(initialData.isActive);
       } else {
-        setLabel(""); setDesc(""); setPic(""); setIsActive(true);
+        setLabel(""); setDesc(""); setPics([]); setIsActive(true);
       }
     }, [initialData]);
 
     const handleCommit = async () => {
-      if (!label || !pic) return;
+      if (!label || pics.length === 0) return;
       setIsSubmitting(true);
       try {
-        const data = { label, desc, pic, isActive, updatedAt: new Date() };
+        const data = { label, desc, pic: pics, isActive, updatedAt: new Date() };
         if (initialData) {
           await updateDoc(doc(db, "protocols", initialData.id), data);
         } else {
@@ -282,19 +291,34 @@ function ProtocolModalContent({ setIsOpen, initialData, onDelete }: any) {
                 </div>
                 
                 <div className="space-y-2">
-                    <Label className="text-[10px] font-black uppercase opacity-50 ml-1">Lead Engineer (PIC)</Label>
-                    <Select value={pic} onValueChange={setPic}>
-                      <SelectTrigger className="h-11 rounded-none border border-black/10 font-mono text-xs uppercase focus:ring-black">
-                        <SelectValue placeholder="ASSIGN_ENGINEER..." />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-none border border-black/10">
-                        {engineers.map((eng) => (
-                          <SelectItem key={eng.id} value={`${eng.Firstname} ${eng.Lastname}`} className="font-mono text-[10px] uppercase">
-                            {eng.Firstname} {eng.Lastname}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Label className="text-[10px] font-black uppercase opacity-50 ml-1">Lead Engineers (PICs)</Label>
+                    <div className="grid grid-cols-1 gap-2 max-h-[200px] overflow-y-auto pr-1 border border-black/10 p-3 bg-[#F9FAFA]">
+                        {engineers.map((eng) => {
+                            const engName = `${eng.Firstname} ${eng.Lastname}`.toUpperCase();
+                            const isChecked = pics.includes(engName);
+                            return (
+                                <div key={eng.id} className="flex items-center gap-2">
+                                    <Checkbox 
+                                        id={eng.id} 
+                                        checked={isChecked}
+                                        onCheckedChange={(checked) => {
+                                            if (checked) {
+                                                setPics(prev => [...prev, engName]);
+                                            } else {
+                                                setPics(prev => prev.filter(p => p !== engName));
+                                            }
+                                        }}
+                                    />
+                                    <Label 
+                                        htmlFor={eng.id}
+                                        className="text-xs font-mono uppercase text-black/60 cursor-pointer"
+                                    >
+                                        {eng.Firstname} {eng.Lastname}
+                                    </Label>
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
 
                 <div className="flex items-center justify-between p-4 bg-[#F9FAFA] border border-black/5 shadow-inner">

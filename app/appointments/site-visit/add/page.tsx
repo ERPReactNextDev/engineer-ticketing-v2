@@ -54,7 +54,7 @@ import { cn } from "@/lib/utils"
 
 // FIREBASE IMPORTS
 import { db } from "@/lib/firebase"
-import { collection, query, where, onSnapshot } from "firebase/firestore"
+import { collection, query, where } from "firebase/firestore"
 
 // Shadcn UI Imports
 import { Button } from "@/components/ui/button"
@@ -109,35 +109,43 @@ export default function SalesAddAppointmentPage() {
     setList(list.includes(value) ? list.filter(i => i !== value) : [...list, value]);
   };
 
-  // 1. SYNC PROTOCOL OPTIONS FROM FIREBASE
+  // 1. SYNC PROTOCOL OPTIONS FROM FIREBASE — one-time read, not a persistent listener
+  // Protocols rarely change; a getDocs is sufficient and saves quota vs onSnapshot.
   React.useEffect(() => {
-    const q = query(collection(db, "protocols"), where("isActive", "==", true));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedOptions = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          label: data.label,
-          desc: data.desc,
-          missionObjectives: data.description || data.missionObjectives,
-          hasPic: Array.isArray(data.pic) ? data.pic.length > 0 : !!data.pic
-        };
-      });
-      
-      const hasOthersInDb = fetchedOptions.some(opt => opt.label.toLowerCase() === "others");
-      if (!hasOthersInDb) {
-        fetchedOptions.push({
-          id: "others", 
-          label: "Others",
-          desc: "Any requirement not covered by standard protocols.",
-          missionObjectives: "",
-          hasPic: true 
+    const fetchProtocols = async () => {
+      try {
+        const { getDocs } = await import("firebase/firestore");
+        const q = query(collection(db, "protocols"), where("isActive", "==", true));
+        const snapshot = await getDocs(q);
+        const fetchedOptions = snapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            label: data.label,
+            desc: data.desc,
+            missionObjectives: data.description || data.missionObjectives,
+            hasPic: Array.isArray(data.pic) ? data.pic.length > 0 : !!data.pic
+          };
         });
+        
+        const hasOthersInDb = fetchedOptions.some(opt => opt.label.toLowerCase() === "others");
+        if (!hasOthersInDb) {
+          fetchedOptions.push({
+            id: "others", 
+            label: "Others",
+            desc: "Any requirement not covered by standard protocols.",
+            missionObjectives: "",
+            hasPic: true 
+          });
+        }
+        setOptions(fetchedOptions);
+      } catch (err) {
+        console.error("PROTOCOLS_FETCH_ERROR", err);
+      } finally {
+        setLoading(false);
       }
-      setOptions(fetchedOptions);
-      setLoading(false);
-    });
-    return () => unsubscribe();
+    };
+    fetchProtocols();
   }, []);
 
   const toggleAssistance = (id: string, hasPic: boolean) => {

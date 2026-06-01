@@ -29,25 +29,28 @@ interface NotificationOptions {
 }
 
 /**
- * Get admin users who should receive all notifications
+ * Get admin users who should receive all notifications.
+ * FIX: Query only users with admin roles instead of downloading the entire users collection.
+ * Uses the Firestore `users` collection where Role is one of the admin values.
  */
 async function getAdminUserIds(db: any): Promise<string[]> {
   const adminIds: string[] = [];
   
   try {
-    // Get users collection
-    const usersSnap = await getDocs(collection(db, "users"));
-    
-    usersSnap.forEach((userDoc: any) => {
-      const userData = userDoc.data();
-      const role = (userData.Role || userData.role || "").toUpperCase();
-      const dept = (userData.Department || userData.department || "").toUpperCase();
-      
-      // IT, SUPER ADMIN, LEADER, MANAGER get global notifications
-      if (dept === "IT" || ["SUPER ADMIN", "LEADER", "MANAGER"].includes(role)) {
-        adminIds.push(userDoc.id);
-      }
-    });
+    // FIX: Use targeted queries instead of fetching all users.
+    // Query IT department users and admin-role users separately, then merge.
+    const { query: fsQuery, collection: fsCollection, where: fsWhere, getDocs: fsGetDocs } = await import("firebase/firestore");
+
+    const [itSnap, adminRoleSnap] = await Promise.all([
+      fsGetDocs(fsQuery(fsCollection(db, "users"), fsWhere("Department", "==", "IT"))),
+      fsGetDocs(fsQuery(fsCollection(db, "users"), fsWhere("Role", "in", ["SUPER ADMIN", "LEADER", "MANAGER"]))),
+    ]);
+
+    const seen = new Set<string>();
+    const addUnique = (id: string) => { if (!seen.has(id)) { seen.add(id); adminIds.push(id); } };
+
+    itSnap.forEach((d: any) => addUnique(d.id));
+    adminRoleSnap.forEach((d: any) => addUnique(d.id));
   } catch (error) {
     console.error("Error fetching admin users:", error);
   }
@@ -56,7 +59,9 @@ async function getAdminUserIds(db: any): Promise<string[]> {
 }
 
 /**
- * Get TSM's subordinate user IDs
+ * Get TSM's subordinate user IDs.
+ * FIX: Query only users whose TSM field matches this TSM's name/refId,
+ * instead of downloading the entire users collection.
  */
 async function getSubordinateIds(db: any, tsmUserId: string): Promise<string[]> {
   const subordinateIds: string[] = [];
@@ -68,34 +73,22 @@ async function getSubordinateIds(db: any, tsmUserId: string): Promise<string[]> 
     const tsmData = tsmDoc.data();
     const tsmName = `${tsmData.Firstname || ""} ${tsmData.Lastname || ""}`.trim();
     const tsmRefId = (tsmData.ReferenceID || "").toUpperCase();
-    
-    // Fetch all users to find subordinates
-    const usersSnap = await getDocs(collection(db, "users"));
-    
     const clean = (n: string) => (n || "").replace(/,/g, "").replace(/\s+/g, " ").trim().toUpperCase();
     const myCleanName = clean(tsmName);
-    
-    usersSnap.forEach((userDoc: any) => {
-      const userData = userDoc.data();
-      const uTSM = clean(userData.TSM);
-      const uTSMName = clean(userData.TSMName);
-      const uTSM_low = clean(userData.tsm);
-      const uTSMName_low = clean(userData.tsmName);
-      const uMan = clean(userData.Manager);
-      const uManName = clean(userData.ManagerName);
-      
-      // Check if this user is a subordinate
-      const isSubordinate = 
-        uTSM === myCleanName || uTSM === tsmRefId || 
-        uTSMName === myCleanName || uTSM_low === myCleanName ||
-        uTSM_low === tsmRefId || uTSMName_low === myCleanName ||
-        uMan === myCleanName || uMan === tsmRefId ||
-        uManName === myCleanName;
-      
-      if (isSubordinate && userDoc.id !== tsmUserId) {
-        subordinateIds.push(userDoc.id);
-      }
-    });
+
+    // FIX: Query by TSM name field instead of fetching all users
+    const { query: fsQuery, collection: fsCollection, where: fsWhere, getDocs: fsGetDocs } = await import("firebase/firestore");
+
+    const [byTSMName, byTSMRef] = await Promise.all([
+      fsGetDocs(fsQuery(fsCollection(db, "users"), fsWhere("TSM", "==", myCleanName))),
+      tsmRefId ? fsGetDocs(fsQuery(fsCollection(db, "users"), fsWhere("TSM", "==", tsmRefId))) : Promise.resolve({ docs: [] as any[] }),
+    ]);
+
+    const seen = new Set<string>();
+    const addUnique = (id: string) => { if (!seen.has(id) && id !== tsmUserId) { seen.add(id); subordinateIds.push(id); } };
+
+    (byTSMName as any).docs.forEach((d: any) => addUnique(d.id));
+    (byTSMRef as any).docs.forEach((d: any) => addUnique(d.id));
   } catch (error) {
     console.error("Error fetching subordinates:", error);
   }
@@ -238,52 +231,34 @@ export async function sendNotificationToHierarchy(
     // For TSA/MEMBER, also notify their TSM and Manager
     if (submitterRole === "MEMBER" || submitterRole === "TSA") {
       const clean = (n: string) => (n || "").replace(/,/g, "").replace(/\s+/g, " ").trim().toUpperCase();
-      const submitterName = clean(`${submitterData.Firstname || ""} ${submitterData.Lastname || ""}`);
-      const submitterRefId = clean(submitterData.ReferenceID || "");
-      
-      // Find TSM/Manager based on TSM fields
-      const usersSnap = await getDocs(collection(db, "users"));
-      
-      usersSnap.forEach((userDoc: any) => {
-        const userData = userDoc.data();
-        const userRole = (userData.Role || userData.role || "").toUpperCase();
-        
-        // Check if this user is the submitter's TSM
-        if (userRole === "TSM") {
-          const tsmName = clean(`${userData.Firstname || ""} ${userData.Lastname || ""}`);
-          const tsmRefId = clean(userData.ReferenceID || "");
-          
-          // Check if submitter references this TSM
-          const uTSM = clean(userData.TSM);
-          const uTSMName = clean(userData.TSMName);
-          
-          // Reverse check: if this TSM's name matches the submitter's TSM field
-          const submitterTSM = clean(submitterData.TSM);
-          const submitterTSMName = clean(submitterData.TSMName);
-          
-          if (submitterTSM === tsmName || submitterTSM === tsmRefId ||
-              submitterTSMName === tsmName || submitterTSMName === tsmRefId) {
-            if (!targetUserIds.includes(userDoc.id)) {
-              targetUserIds.push(userDoc.id);
-            }
+
+      // FIX: Use the submitter's own TSM/Manager fields to look up their hierarchy
+      // instead of scanning the entire users collection.
+      const submitterTSMName = clean(submitterData.TSMName || submitterData.TSM || "");
+      const submitterManagerName = clean(submitterData.ManagerName || submitterData.Manager || "");
+
+      const { query: fsQuery, collection: fsCollection, where: fsWhere, getDocs: fsGetDocs } = await import("firebase/firestore");
+
+      const lookups: Promise<any>[] = [];
+      if (submitterTSMName) {
+        lookups.push(fsGetDocs(fsQuery(fsCollection(db, "users"), fsWhere("Role", "==", "TSM"))));
+      }
+      if (submitterManagerName) {
+        lookups.push(fsGetDocs(fsQuery(fsCollection(db, "users"), fsWhere("Role", "in", ["MANAGER", "SALES HEAD"]))));
+      }
+
+      const results = await Promise.all(lookups);
+      results.forEach((snap: any) => {
+        snap.docs.forEach((userDoc: any) => {
+          const userData = userDoc.data();
+          const fullName = clean(`${userData.Firstname || ""} ${userData.Lastname || ""}`);
+          const refId = clean(userData.ReferenceID || "");
+          const isTSMMatch = submitterTSMName && (fullName === submitterTSMName || refId === submitterTSMName);
+          const isManagerMatch = submitterManagerName && (fullName === submitterManagerName || refId === submitterManagerName);
+          if ((isTSMMatch || isManagerMatch) && !targetUserIds.includes(userDoc.id)) {
+            targetUserIds.push(userDoc.id);
           }
-        }
-        
-        // Check if this user is the submitter's Manager
-        if (userRole === "MANAGER") {
-          const managerName = clean(`${userData.Firstname || ""} ${userData.Lastname || ""}`);
-          const managerRefId = clean(userData.ReferenceID || "");
-          
-          const submitterManager = clean(submitterData.Manager);
-          const submitterManagerName = clean(submitterData.ManagerName);
-          
-          if (submitterManager === managerName || submitterManager === managerRefId ||
-              submitterManagerName === managerName || submitterManagerName === managerRefId) {
-            if (!targetUserIds.includes(userDoc.id)) {
-              targetUserIds.push(userDoc.id);
-            }
-          }
-        }
+        });
       });
     }
     
@@ -414,6 +389,30 @@ export const NotificationTemplates = {
       title: "New Product Recommendation",
       body: `${clientName} recommended "${productName}"`,
       url: "/requests/recommendation",
+    }),
+  },
+
+  // Meeting Room Bookings
+  meetingRoom: {
+    created: (roomName: string, date: string, time: string) => ({
+      title: "New Meeting Room Booking",
+      body: `${roomName} booked for ${date} at ${time}`,
+      url: "/appointments/meeting-rooms",
+    }),
+    confirmed: (roomName: string, date: string) => ({
+      title: "Meeting Room Confirmed",
+      body: `Your booking for ${roomName} on ${date} is confirmed`,
+      url: "/appointments/meeting-rooms",
+    }),
+    cancelled: (roomName: string) => ({
+      title: "Meeting Room Booking Cancelled",
+      body: `Booking for ${roomName} has been cancelled`,
+      url: "/appointments/meeting-rooms",
+    }),
+    rejected: (roomName: string) => ({
+      title: "Meeting Room Booking Rejected",
+      body: `Your booking request for ${roomName} was not approved`,
+      url: "/appointments/meeting-rooms",
     }),
   },
 

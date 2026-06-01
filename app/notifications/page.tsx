@@ -69,16 +69,20 @@ export default function NotificationsPage() {
         const unsubOther = onSnapshot(query(collection(db, "other_requests"), where("status", "==", "PENDING")), 
             (snap) => setCounts(prev => ({ ...prev, otherRequest: snap.size })));
 
-        // Logic for testing overdue (simplified for notification summary)
-        const unsubTesting = onSnapshot(collection(db, "testing_tracker"), (snap) => {
-            const today = new Date();
-            const overdue = snap.docs.filter(doc => {
-                const d = doc.data();
-                return !d.releaseDate && d.targetDate?.toDate() && d.targetDate.toDate() < today;
-            }).length;
-            setCounts(prev => ({ ...prev, testingOverdue: overdue }));
-            setLoading(false);
-        });
+        // FIX: Filter testing_tracker server-side to only unreleased items,
+        // avoiding a full collection download just to count overdue items client-side.
+        const unsubTesting = onSnapshot(
+            query(collection(db, "testing_tracker"), where("releaseDate", "==", null)),
+            (snap) => {
+                const today = new Date();
+                const overdue = snap.docs.filter(doc => {
+                    const d = doc.data();
+                    return d.targetDate?.toDate() && d.targetDate.toDate() < today;
+                }).length;
+                setCounts(prev => ({ ...prev, testingOverdue: overdue }));
+                setLoading(false);
+            }
+        );
 
         return () => {
             unsubSite(); unsubJob(); unsubShop(); unsubDialux(); unsubOther(); unsubTesting();

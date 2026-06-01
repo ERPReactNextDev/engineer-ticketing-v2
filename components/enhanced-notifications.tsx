@@ -37,8 +37,10 @@ interface EnhancedNotificationsProps {
     productRequest: number
     unreadMessages: number
     unreadByService: Record<string, number>
+    meetingRoomPending?: number
   }
   userId?: string | null
+  userDept?: string | null
   onClose: () => void
 }
 
@@ -73,10 +75,11 @@ const STATUS_CONFIG = {
   }
 }
 
-export function EnhancedNotifications({ notifications, userId, onClose }: EnhancedNotificationsProps) {
+export function EnhancedNotifications({ notifications, userId, userDept, onClose }: EnhancedNotificationsProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = React.useState<"all" | "critical" | "pending">("all")
   const [showSettings, setShowSettings] = React.useState(false)
+  const isAdmin = (userDept || "").toUpperCase() === "ADMIN"
 
   const appendId = (url: string) => userId
     ? url.includes("?") ? `${url}&userId=${userId}` : `${url}?userId=${userId}`
@@ -85,7 +88,26 @@ export function EnhancedNotifications({ notifications, userId, onClose }: Enhanc
   // Build notification items array
   const allItems: NotificationItem[] = React.useMemo(() => {
     const items: NotificationItem[] = []
-    
+
+    // Admin dept — only show meeting room notifications
+    if (isAdmin) {
+      const pending = notifications.meetingRoomPending || notifications.siteVisit || 0
+      if (pending > 0) {
+        items.push({
+          id: "meeting-room-pending",
+          type: "Meeting Rooms",
+          title: "Pending Room Approvals",
+          description: `${pending} booking${pending !== 1 ? "s" : ""} awaiting your approval`,
+          status: "pending",
+          timestamp: new Date(),
+          count: pending,
+          path: "/appointments/meeting-rooms",
+          icon: CalendarCheck,
+        })
+      }
+      return items
+    }
+
     if (notifications.testingOverdue > 0) {
       items.push({
         id: "testing-critical",
@@ -221,12 +243,33 @@ export function EnhancedNotifications({ notifications, userId, onClose }: Enhanc
   }
 
   return (
-    <div 
-      className="w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
-      onClick={(e) => e.stopPropagation()}
-    >
+    <>
+      {/* Mobile: fixed bottom sheet overlay */}
+      <div className="sm:hidden fixed inset-0 z-[200] flex flex-col justify-end bg-black/40 backdrop-blur-sm animate-in fade-in duration-200"
+        onClick={onClose}>
+        <div className="bg-white rounded-t-[28px] shadow-2xl overflow-hidden animate-in slide-in-from-bottom duration-300 max-h-[80vh] flex flex-col"
+          onClick={e => e.stopPropagation()}>
+          <div className="flex justify-center pt-3 pb-1 shrink-0">
+            <div className="w-10 h-1 bg-zinc-200 rounded-full" />
+          </div>
+          <NotifInner allItems={allItems} filteredItems={filteredItems} activeTab={activeTab} setActiveTab={setActiveTab} totalCount={totalCount} criticalCount={criticalCount} pendingCount={pendingCount} handleItemClick={handleItemClick} onClose={onClose} router={router} showSettings={showSettings} setShowSettings={setShowSettings} />
+        </div>
+      </div>
+
+      {/* Desktop: dropdown */}
+      <div className="hidden sm:block w-80 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
+        onClick={e => e.stopPropagation()}>
+        <NotifInner allItems={allItems} filteredItems={filteredItems} activeTab={activeTab} setActiveTab={setActiveTab} totalCount={totalCount} criticalCount={criticalCount} pendingCount={pendingCount} handleItemClick={handleItemClick} onClose={onClose} router={router} showSettings={showSettings} setShowSettings={setShowSettings} />
+      </div>
+    </>
+  )
+}
+
+function NotifInner({ allItems, filteredItems, activeTab, setActiveTab, totalCount, criticalCount, pendingCount, handleItemClick, onClose, router, showSettings, setShowSettings }: any) {
+  return (
+    <>
       {/* Header */}
-      <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-zinc-50 to-white">
+      <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-zinc-50 to-white shrink-0">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-[#E33636]">
@@ -238,60 +281,32 @@ export function EnhancedNotifications({ notifications, userId, onClose }: Enhanc
             </div>
           </div>
           <div className="flex items-center gap-1">
-            <button 
-              onClick={() => setShowSettings(!showSettings)}
-              className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-            >
+            <button onClick={() => setShowSettings(!showSettings)} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
               <Settings className="w-3.5 h-3.5 text-gray-400" />
             </button>
-            <button 
-              onClick={onClose}
-              className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-            >
+            <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
               <X className="w-3.5 h-3.5 text-gray-400" />
             </button>
           </div>
         </div>
-
-        {/* Stats Row */}
-        <div className="flex gap-2 pointer-events-auto">
-          <button 
-            onClick={(e) => { e.stopPropagation(); setActiveTab("all") }}
-            className={cn(
-              "flex-1 py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all cursor-pointer select-none",
-              activeTab === "all" ? "bg-zinc-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-            )}
-            type="button"
-          >
+        <div className="flex gap-2">
+          <button onClick={(e) => { e.stopPropagation(); setActiveTab("all") }} type="button"
+            className={cn("flex-1 py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all", activeTab === "all" ? "bg-zinc-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200")}>
             All ({totalCount})
           </button>
-          <button 
-            onClick={(e) => { e.stopPropagation(); setActiveTab("critical") }}
-            className={cn(
-              "flex-1 py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer select-none",
-              activeTab === "critical" ? "bg-red-500 text-white" : "bg-red-50 text-red-600 hover:bg-red-100"
-            )}
-            type="button"
-          >
-            <AlertTriangle className="w-3 h-3" />
-            {criticalCount}
+          <button onClick={(e) => { e.stopPropagation(); setActiveTab("critical") }} type="button"
+            className={cn("flex-1 py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center justify-center gap-1", activeTab === "critical" ? "bg-red-500 text-white" : "bg-red-50 text-red-600 hover:bg-red-100")}>
+            <AlertTriangle className="w-3 h-3" />{criticalCount}
           </button>
-          <button 
-            onClick={(e) => { e.stopPropagation(); setActiveTab("pending") }}
-            className={cn(
-              "flex-1 py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer select-none",
-              activeTab === "pending" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-600 hover:bg-amber-100"
-            )}
-            type="button"
-          >
-            <Clock className="w-3 h-3" />
-            {pendingCount}
+          <button onClick={(e) => { e.stopPropagation(); setActiveTab("pending") }} type="button"
+            className={cn("flex-1 py-1.5 px-2 rounded-lg text-[9px] font-bold transition-all flex items-center justify-center gap-1", activeTab === "pending" ? "bg-amber-500 text-white" : "bg-amber-50 text-amber-600 hover:bg-amber-100")}>
+            <Clock className="w-3 h-3" />{pendingCount}
           </button>
         </div>
       </div>
 
       {/* Content */}
-      <div className="max-h-[360px] overflow-y-auto">
+      <div className="max-h-[360px] overflow-y-auto flex-1">
         {filteredItems.length === 0 ? (
           <div className="py-10 px-4 text-center">
             <div className="w-12 h-12 rounded-full bg-emerald-50 flex items-center justify-center mx-auto mb-3">
@@ -302,32 +317,21 @@ export function EnhancedNotifications({ notifications, userId, onClose }: Enhanc
           </div>
         ) : (
           <div className="py-2">
-            {filteredItems.map((item) => {
-              const status = STATUS_CONFIG[item.status]
+            {filteredItems.map((item: any) => {
+              const status = STATUS_CONFIG[item.status as keyof typeof STATUS_CONFIG] || STATUS_CONFIG.pending
               const Icon = item.icon || status.icon
-              
               return (
-                <div
-                  key={item.id}
-                  onClick={() => handleItemClick(item.path)}
+                <div key={item.id} onClick={() => handleItemClick(item.path)}
                   className="mx-2 mb-2 p-3 rounded-xl border hover:shadow-md transition-all cursor-pointer group"
-                  style={{ borderColor: item.status === "critical" ? "#fee2e2" : item.status === "pending" ? "#fef3c7" : "#e5e7eb" }}
-                >
+                  style={{ borderColor: item.status === "critical" ? "#fee2e2" : item.status === "pending" ? "#fef3c7" : "#e5e7eb" }}>
                   <div className="flex items-start gap-3">
                     <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0", status.bg, status.text)}>
                       <Icon className="w-5 h-5" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5">
-                        <span className={cn("text-[9px] font-black px-1.5 py-0.5 rounded uppercase", status.bg, status.text)}>
-                          {item.type}
-                        </span>
-                        {item.status === "critical" && (
-                          <span className="text-[8px] font-bold text-red-500 flex items-center gap-0.5">
-                            <AlertTriangle className="w-3 h-3" />
-                            URGENT
-                          </span>
-                        )}
+                        <span className={cn("text-[9px] font-black px-1.5 py-0.5 rounded uppercase", status.bg, status.text)}>{item.type}</span>
+                        {item.status === "critical" && <span className="text-[8px] font-bold text-red-500 flex items-center gap-0.5"><AlertTriangle className="w-3 h-3" />URGENT</span>}
                       </div>
                       <p className="text-[11px] font-bold text-gray-900 leading-tight mb-0.5">{item.title}</p>
                       <p className="text-[9px] text-gray-500 leading-relaxed">{item.description}</p>
@@ -342,24 +346,17 @@ export function EnhancedNotifications({ notifications, userId, onClose }: Enhanc
       </div>
 
       {/* Footer */}
-      <div className="p-3 border-t border-gray-100 bg-gray-50/50">
+      <div className="p-3 border-t border-gray-100 bg-gray-50/50 shrink-0">
         <div className="flex items-center gap-2">
-          <button 
-            onClick={() => { router.push("/notifications"); onClose() }}
-            className="flex-1 py-2 rounded-lg bg-zinc-900 text-white text-[10px] font-bold hover:bg-zinc-800 transition-colors flex items-center justify-center gap-1"
-          >
-            View All
-            <ExternalLink className="w-3 h-3" />
+          <button onClick={() => { router.push("/notifications"); onClose() }}
+            className="flex-1 py-2 rounded-lg bg-zinc-900 text-white text-[10px] font-bold hover:bg-zinc-800 transition-colors flex items-center justify-center gap-1">
+            View All <ExternalLink className="w-3 h-3" />
           </button>
-          <button 
-            onClick={() => { /* Mark all as read logic */ }}
-            className="px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-            title="Mark all as read"
-          >
+          <button onClick={() => {}} className="px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors" title="Mark all as read">
             <Check className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
-    </div>
+    </>
   )
 }

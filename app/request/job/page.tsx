@@ -34,7 +34,7 @@ import {
 
 // FIREBASE
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot, query, orderBy, doc, updateDoc, getDoc } from "firebase/firestore"
+import { collection, onSnapshot, query, orderBy, where, doc, updateDoc, getDoc } from "firebase/firestore"
 
 // CUSTOM COMPONENTS
 import { PageHeader } from "@/components/page-header"
@@ -493,15 +493,29 @@ export default function JobRequestManagementPage() {
         fetchUser()
     }, [])
 
-    // 2. LIVE DATA SYNC WITH ROLE-BASED FILTERING
+    // 2. LIVE DATA SYNC — server-side filtered to avoid full collection downloads
     React.useEffect(() => {
         if (isUserLoading || !user.id) return;
 
         setIsDataLoading(true)
-        const q = query(collection(db, "job_requests"), orderBy("createdAt", "desc"))
+        const userDept = user.dept.toUpperCase();
+        const userRole = user.role.toUpperCase();
+        const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || ["SUPER ADMIN", "LEADER"].includes(userRole);
+        const isTSM = userRole === "TSM";
+        const isManager = userRole === "MANAGER";
+
+        // FIX: Apply server-side where filter for non-admin users
+        let q;
+        if (hasGlobalAccess) {
+            q = query(collection(db, "job_requests"), orderBy("createdAt", "desc"))
+        } else if ((isTSM || isManager) && subordinateIds.length > 0) {
+            q = query(collection(db, "job_requests"), where("submittedBy", "in", [user.id, ...subordinateIds.slice(0, 9)]), orderBy("createdAt", "desc"))
+        } else {
+            q = query(collection(db, "job_requests"), where("submittedBy", "==", user.id), orderBy("createdAt", "desc"))
+        }
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            let liveData = snapshot.docs.map(doc => {
+            const liveData = snapshot.docs.map(doc => {
                 const data = doc.data()
                 return {
                     id: doc.id.slice(-6).toUpperCase(),
@@ -511,33 +525,6 @@ export default function JobRequestManagementPage() {
                     submittedBy: data.submittedBy,
                 }
             })
-
-            /**
-             * VISIBILITY PROTOCOL:
-             * - IT, ENGINEERING, SUPER ADMIN, MANAGER, LEADER: Global visibility
-             * - TSM (SALES): Can see their own AND all TSA requests
-             * - TSA (SALES): Restricted to personal records (submittedBy matches userId)
-             * - OTHERS (MEMBER): Restricted to personal records (submittedBy matches userId)
-             */
-            const userDept = user.dept.toUpperCase();
-            const userRole = user.role.toUpperCase();
-            const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || ["SUPER ADMIN", "LEADER"].includes(userRole);
-            const isTSM = userRole === "TSM";
-            const isManager = userRole === "MANAGER";
-
-            // Client-side filtering for non-admin users
-            if (!hasGlobalAccess) {
-                if (isTSM || isManager) {
-                    // TSM and MANAGER can see their own AND all their subordinate requests
-                    liveData = liveData.filter(r =>
-                        r.submittedBy === user.id ||
-                        subordinateIds.includes(r.submittedBy)
-                    );
-                } else {
-                    // TSA and other Members ONLY see their own requests
-                    liveData = liveData.filter(r => r.submittedBy === user.id);
-                }
-            }
 
             setRequests(liveData)
             setIsDataLoading(false)

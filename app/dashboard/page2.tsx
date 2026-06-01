@@ -190,7 +190,7 @@ export default function EngiconnectDashboard() {
         const unsubOther = onSnapshot(query(collection(db, "other_requests"), where("status", "==", "PENDING")), (snap) => setNotifications(prev => ({ ...prev, otherRequest: snap.size })));
         const unsubDialux = onSnapshot(query(collection(db, "dialux_requests"), where("status", "==", "PENDING")), (snap) => setNotifications(prev => ({ ...prev, dialuxRequest: snap.size })));
         
-        const unsubTesting = onSnapshot(collection(db, "testing_tracker"), (snap) => {
+        const unsubTesting = onSnapshot(query(collection(db, "testing_tracker"), where("arrivalDate", "!=", null), limit(200)), (snap) => {
             let active = 0; let overdue = 0;
             const today = new Date();
             snap.docs.forEach(doc => {

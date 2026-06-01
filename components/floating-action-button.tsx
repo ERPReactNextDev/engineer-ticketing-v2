@@ -26,6 +26,26 @@ export function FloatingActionButton({ department, userId }: FloatingActionButto
 
   // Department-specific quick actions
   const quickActions = React.useMemo(() => {
+    // Admin dept — only meeting room actions
+    if (dept === "ADMIN") {
+      return [
+        {
+          icon: CalendarCheck,
+          label: "Book a Room",
+          href: appendId("/appointments/meeting-rooms/add"),
+          color: "bg-zinc-900",
+          show: () => true
+        },
+        {
+          icon: MoreHorizontal,
+          label: "All Bookings",
+          href: appendId("/appointments/meeting-rooms"),
+          color: "bg-blue-600",
+          show: () => true
+        },
+      ]
+    }
+
     const base = [
       { 
         icon: CalendarCheck, 

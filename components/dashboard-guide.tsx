@@ -16,8 +16,47 @@ interface DashboardGuideProps {
 export function DashboardGuide({ department, role }: DashboardGuideProps) {
   const [isOpen, setIsOpen] = React.useState(false)
   const [currentPage, setCurrentPage] = React.useState(0)
+  const isAdmin = (department || "").toUpperCase() === "ADMIN"
 
-  const features = [
+  const adminFeatures = [
+    {
+      icon: LayoutDashboard,
+      title: "Your Admin Command Center",
+      description: "Your dashboard is tailored for room management. See pending approvals, room status, and today's schedule at a glance.",
+      tip: "💡 Pending approvals are highlighted in amber — act on them first",
+      color: "bg-zinc-900 text-white"
+    },
+    {
+      icon: Bell,
+      title: "Pending Approvals",
+      description: "When staff book a meeting room, it appears here for your approval. Confirm or reject with a reason. Approved bookings notify the requester automatically.",
+      tip: "🔔 Your bell icon only shows meeting room pending counts",
+      color: "bg-amber-50 text-amber-600"
+    },
+    {
+      icon: Target,
+      title: "Room Status — Live",
+      description: "See which rooms are occupied right now and which are free. Green pulse = available, red = in use. Tap any room to see its full schedule.",
+      tip: "🟢 Green rooms are available · 🔴 Red rooms are currently in use",
+      color: "bg-emerald-50 text-emerald-600"
+    },
+    {
+      icon: BarChart3,
+      title: "Room Analytics",
+      description: "Track utilization rates, peak booking hours, and which departments use rooms most. Use this to optimize room availability and plan capacity.",
+      tip: "📊 Go to Admin → Room Analytics for detailed reports",
+      color: "bg-blue-50 text-blue-600"
+    },
+    {
+      icon: Zap,
+      title: "Quick Book (+ Button)",
+      description: "Tap the + button at the bottom right to quickly book a room or view all bookings. You can also book on behalf of other staff.",
+      tip: "⚡ Press N on keyboard to open quick actions instantly",
+      color: "bg-violet-50 text-violet-600"
+    },
+  ]
+
+  const features = isAdmin ? adminFeatures : [
     {
       icon: LayoutDashboard,
       title: "Services at Your Fingertips",
@@ -123,7 +162,7 @@ export function DashboardGuide({ department, role }: DashboardGuideProps) {
               <Lightbulb className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-black text-gray-900">Dashboard Features</h3>
+              <h3 className="text-sm font-black text-gray-900">{isAdmin ? "Admin Guide" : "Dashboard Features"}</h3>
               <p className="text-[10px] font-bold text-gray-400">
                 Page {currentPage + 1} of {features.length}
               </p>

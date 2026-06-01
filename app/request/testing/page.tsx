@@ -44,7 +44,7 @@ import { format, isAfter, differenceInDays } from "date-fns"
 
 // DATABASE TOOLS
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot, query, orderBy, doc, writeBatch, updateDoc, Timestamp, getDoc } from "firebase/firestore"
+import { collection, onSnapshot, query, orderBy, where, doc, writeBatch, updateDoc, Timestamp, getDoc } from "firebase/firestore"
 
 // SHARED COMPONENTS
 import { PageHeader } from "@/components/page-header"
@@ -401,15 +401,29 @@ export default function TestingTrackerPage() {
         fetchUser()
     }, [])
 
-    // 2. LIVE DATA SYNC WITH ROLE-BASED FILTERING
+    // 2. LIVE DATA SYNC — server-side filtered to avoid full collection downloads
     React.useEffect(() => {
         if (isUserLoading || !user.id) return;
 
         setIsDataLoading(true)
-        const q = query(collection(db, "testing_tracker"), orderBy("createdAt", "desc"))
+        const userDept = user.dept.toUpperCase();
+        const userRole = user.role.toUpperCase();
+        const hasGlobalAccess = userDept === "IT" || userDept === "PROCUREMENT" || userDept === "ENGINEERING" || userDept === "PQ" || userDept === "QUALITY" || ["SUPER ADMIN", "MANAGER", "LEADER", "PQ"].includes(userRole);
+        const isTSM = userRole === "TSM";
+        const isManager = userRole === "MANAGER";
+
+        // FIX: Apply server-side where filter for non-admin users
+        let q;
+        if (hasGlobalAccess) {
+            q = query(collection(db, "testing_tracker"), orderBy("createdAt", "desc"))
+        } else if ((isTSM || isManager) && subordinateIds.length > 0) {
+            q = query(collection(db, "testing_tracker"), where("submittedBy", "in", [user.id, ...subordinateIds.slice(0, 9)]), orderBy("createdAt", "desc"))
+        } else {
+            q = query(collection(db, "testing_tracker"), where("submittedBy", "==", user.id), orderBy("createdAt", "desc"))
+        }
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            let liveData = snapshot.docs.map(doc => {
+            const liveData = snapshot.docs.map(doc => {
                 const data = doc.data()
                 const today = new Date()
                 const target = data.targetDate?.toDate()
@@ -430,30 +444,6 @@ export default function TestingTrackerPage() {
                     createdBy: data.createdBy || data.submittedBy || data.userId,
                 } as TrackerEntry
             })
-
-            /**
-             * VISIBILITY PROTOCOL:
-             * - IT, PROCUREMENT, ENGINEERING, PQ (Product Quality), QUALITY, SUPER ADMIN, MANAGER, LEADER: Global visibility
-             * - TSM: Can see their own AND all TSA requests
-             * - TSA/MEMBER: Restricted to personal records
-             */
-            const userDept = user.dept.toUpperCase();
-            const userRole = user.role.toUpperCase();
-            const hasGlobalAccess = userDept === "IT" || userDept === "PROCUREMENT" || userDept === "ENGINEERING" || userDept === "PQ" || userDept === "QUALITY" || ["SUPER ADMIN", "MANAGER", "LEADER", "PQ"].includes(userRole);
-            const isTSM = userRole === "TSM";
-            const isManager = userRole === "MANAGER";
-
-            // Client-side filtering for non-admin users
-            if (!hasGlobalAccess) {
-                if (isTSM || isManager) {
-                    liveData = liveData.filter(r =>
-                        r.createdBy === user.id ||
-                        subordinateIds.includes(r.createdBy || "")
-                    );
-                } else {
-                    liveData = liveData.filter(r => r.createdBy === user.id);
-                }
-            }
 
             setEntries(liveData)
             setIsDataLoading(false)

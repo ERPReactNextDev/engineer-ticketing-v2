@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils"
 
 // DATABASE TOOLS
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot, query, orderBy, doc, updateDoc } from "firebase/firestore"
+import { collection, onSnapshot, query, orderBy, where, limit, doc, updateDoc } from "firebase/firestore"
 
 // SHARED COMPONENTS
 import { PageHeader } from "@/components/page-header"
@@ -39,6 +39,8 @@ export default function OtherRequestManagementPage() {
     
     // APP STATE
     const [userId, setUserId] = React.useState<string | null>(null)
+    const [userRole, setUserRole] = React.useState<string>("")
+    const [userDept, setUserDept] = React.useState<string>("")
     const [requests, setRequests] = React.useState<any[]>([])
     const [isDataLoading, setIsDataLoading] = React.useState(true)
     const [showInstructions, setShowInstructions] = React.useState(false)
@@ -50,10 +52,34 @@ export default function OtherRequestManagementPage() {
     const [currentPage, setCurrentPage] = React.useState(1)
     const [itemsPerPage, setItemsPerPage] = React.useState("10")
 
-    // FETCH DATA
+    // FETCH DATA — role-filtered to prevent full collection reads
     React.useEffect(() => {
-        setUserId(localStorage.getItem("userId"))
-        const q = query(collection(db, "other_requests"), orderBy("createdAt", "desc"))
+        const storedId = localStorage.getItem("userId")
+        const storedRole = (localStorage.getItem("userRole") || "MEMBER").toUpperCase()
+        const storedDept = (localStorage.getItem("userDepartment") || localStorage.getItem("department") || "").toUpperCase()
+        setUserId(storedId)
+        setUserRole(storedRole)
+        setUserDept(storedDept)
+        if (!storedId) { setIsDataLoading(false); return; }
+
+        const hasGlobalAccess =
+            storedDept === "IT" ||
+            storedDept === "ENGINEERING" ||
+            ["SUPER ADMIN", "MANAGER", "LEADER"].includes(storedRole)
+
+        let q
+        if (hasGlobalAccess) {
+            // Admin/IT/Engineering: full access with cap
+            q = query(collection(db, "other_requests"), orderBy("createdAt", "desc"), limit(200))
+        } else {
+            // Regular members: only their own requests
+            q = query(
+                collection(db, "other_requests"),
+                where("submittedBy", "==", storedId),
+                orderBy("createdAt", "desc"),
+                limit(100)
+            )
+        }
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             setRequests(snapshot.docs.map(doc => ({ 

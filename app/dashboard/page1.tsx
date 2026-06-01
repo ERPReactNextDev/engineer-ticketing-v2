@@ -176,7 +176,7 @@ export default function EngiconnectDashboard() {
         const unsubDialuxDone = onSnapshot(query(collection(db, "dialux_requests"), where("status", "==", "COMPLETED")),
             (snap) => setNotifications(prev => ({ ...prev, dialuxCompleted: snap.size })));
 
-        const unsubTesting = onSnapshot(collection(db, "testing_tracker"), (snap) => {
+        const unsubTesting = onSnapshot(query(collection(db, "testing_tracker"), where("arrivalDate", "!=", null), limit(200)), (snap) => {
             let active = 0; let overdue = 0;
             const today = new Date();
             snap.docs.forEach(doc => {
@@ -191,6 +191,7 @@ export default function EngiconnectDashboard() {
         });
 
         // Combined messaging listener logic
+        // NOTE: Filtered to only the current user's own requests to avoid full collection reads.
         const targetCollections = [
             { key: 'jobRequest', col: 'job_requests' },
             { key: 'dialux', col: 'dialux_requests' },
@@ -201,27 +202,31 @@ export default function EngiconnectDashboard() {
         ];
 
         const msgUnsubs = targetCollections.map(({ key, col }) => {
-            return onSnapshot(collection(db, col), (snap) => {
-                let unreadCount = 0;
-                snap.docs.forEach(doc => {
-                    const data = doc.data();
-                    if (data.messages && Array.isArray(data.messages)) {
-                        unreadCount += data.messages.filter((m: any) => 
-                            m.senderId !== userId && !m.seenBy?.includes(userId)
-                        ).length;
-                    }
-                });
-                
-                setNotifications(prev => {
-                    const updatedUnreadByService = { ...prev.unreadByService, [key]: unreadCount };
-                    const totalUnread = Object.values(updatedUnreadByService).reduce((a, b) => (typeof a === 'number' ? a : 0) + (typeof b === 'number' ? b : 0), 0);
-                    return { 
-                        ...prev, 
-                        unreadByService: updatedUnreadByService as any,
-                        unreadMessages: totalUnread
-                    };
-                });
-            });
+            // Filter to only documents submitted by this user to avoid full collection reads
+            return onSnapshot(
+                query(collection(db, col), where("submittedBy", "==", userId), limit(50)),
+                (snap) => {
+                    let unreadCount = 0;
+                    snap.docs.forEach(doc => {
+                        const data = doc.data();
+                        if (data.messages && Array.isArray(data.messages)) {
+                            unreadCount += data.messages.filter((m: any) => 
+                                m.senderId !== userId && !m.seenBy?.includes(userId)
+                            ).length;
+                        }
+                    });
+                    
+                    setNotifications(prev => {
+                        const updatedUnreadByService = { ...prev.unreadByService, [key]: unreadCount };
+                        const totalUnread = Object.values(updatedUnreadByService).reduce((a, b) => (typeof a === 'number' ? a : 0) + (typeof b === 'number' ? b : 0), 0);
+                        return { 
+                            ...prev, 
+                            unreadByService: updatedUnreadByService as any,
+                            unreadMessages: totalUnread
+                        };
+                    });
+                }
+            );
         });
 
         return () => { 

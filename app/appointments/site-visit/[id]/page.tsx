@@ -66,27 +66,42 @@ export default function AppointmentDetailsPage() {
 
         const fetchProtocols = async () => {
             try {
+                // FIX: One-time getDocs instead of onSnapshot — protocols don't change during a session
+                const { getDocs } = await import("firebase/firestore");
                 const q = query(collection(db, "protocols"), where("isActive", "==", true));
-                const unsubscribe = onSnapshot(q, (snapshot: any) => {
-                    const dbProtocols = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) as any[];
+                const snapshot = await getDocs(q);
+                const dbProtocols = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) as any[];
                     const matched = dbProtocols.filter((proto: any) => data.protocols.includes(proto.id));
                     
                     // Update Labels for display
                     setProtocolLabels(matched.map(p => p.label || p.id));
 
-                    // LOGIC: IF "INSTALLATION SERVICES" IS SELECTED, ONLY SHOW ITS PICS
-                    const installationProtocol = matched.find(p => p.label?.toLowerCase().includes("installation"));
-                    
+                    // LOGIC: Show all PICS from ALL selected protocols, handle single string or array!
                     let finalPics: any[] = [];
-                    if (installationProtocol) {
-                        finalPics = Array.from(new Set((installationProtocol.pic || []).map((name: string) => name.trim().toUpperCase())));
-                    } else {
-                        finalPics = Array.from(new Set(matched.flatMap(p => p.pic || []).map((name: string) => name.trim().toUpperCase())));
+                    finalPics = Array.from(new Set(matched.flatMap(p => {
+                        const picValue = p.pic;
+                        if (Array.isArray(picValue)) {
+                            return picValue.map((name: string) => name.trim().toUpperCase());
+                        } else if (typeof picValue === 'string') {
+                            return [picValue.trim().toUpperCase()];
+                        }
+                        return [];
+                    })));
+                    
+                    // If no PICS found in selected protocols, fall back to all possible PICS from all protocols
+                    if (finalPics.length === 0) {
+                        finalPics = Array.from(new Set(dbProtocols.flatMap(p => {
+                            const picValue = p.pic;
+                            if (Array.isArray(picValue)) {
+                                return picValue.map((name: string) => name.trim().toUpperCase());
+                            } else if (typeof picValue === 'string') {
+                                return [picValue.trim().toUpperCase()];
+                            }
+                            return [];
+                        })));
                     }
                     
                     setAvailablePics(finalPics);
-                });
-                return () => unsubscribe();
             } catch (err) { console.error("PROTOCOL_SYNC_ERROR", err); }
         };
         fetchProtocols();

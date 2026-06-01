@@ -30,9 +30,9 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        "sticky top-0 z-40 flex h-12 md:h-14 shrink-0 items-center",
-        "border-b border-zinc-200/80 bg-white/90 backdrop-blur-xl",
-        "px-2 md:px-4 justify-between shadow-sm transition-all duration-200",
+        "sticky top-0 z-50 flex h-14 md:h-16 shrink-0 items-center",
+        "border-b border-zinc-200 bg-white",
+        "px-3 md:px-6 justify-between shadow-xl transition-all duration-200",
         className
       )}
     >

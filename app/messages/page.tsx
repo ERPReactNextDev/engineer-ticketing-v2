@@ -147,6 +147,9 @@ function MessagesContent() {
     // Remove the redundant subordinate fetching useEffect
 
     // Real-time Firestore Sync with Security Filtering
+    // FIX: Removed `selectedRequest` from deps — it caused all 6 listeners to be torn down
+    // and re-created on every conversation click, multiplying reads by the number of clicks.
+    // FIX: Added server-side where filters for non-admin users to avoid full collection downloads.
     useEffect(() => {
         if (!db || !userId) return;
 
@@ -155,7 +158,18 @@ function MessagesContent() {
         const isTSM = userRole === "TSM";
 
         const unsubscribes = COLLECTIONS.map(coll => {
-            return onSnapshot(collection(db, coll.id), (snapshot) => {
+            // Build a filtered query for non-admin users to avoid downloading entire collections
+            let q;
+            if (hasGlobalAccess) {
+                q = collection(db, coll.id);
+            } else if (isTSM && subordinateIds.length > 0) {
+                // Firestore "in" supports up to 30 values; slice to be safe
+                q = query(collection(db, coll.id), where("submittedBy", "in", [userId, ...subordinateIds.slice(0, 9)])) as any;
+            } else {
+                q = query(collection(db, coll.id), where("submittedBy", "==", userId)) as any;
+            }
+
+            return onSnapshot(q, (snapshot) => {
                 setAllRequests(prev => {
                     const others = prev.filter(p => p.sourceCollection !== coll.id);
                     let current = snapshot.docs.map(d => {
@@ -181,41 +195,23 @@ function MessagesContent() {
                         };
                     });
 
-                    /**
-                     * SECURITY FILTERING:
-                     * - IT, ENGINEERING, SUPER ADMIN, LEADER, MANAGER: See all requests
-                     * - TSM: See own requests + subordinate requests
-                     * - TSA/MEMBER: See own requests only
-                     */
-                    if (!hasGlobalAccess) {
-                        current = current.filter((r: any) => {
-                             const possibleOwners = [
-                                 r.submittedBy, r.createdBy, r.userId, r.pic, 
-                                 r.assignedTo, r.UserId, r.UserId_low
-                             ].filter(Boolean);
-                             const isOwner = possibleOwners.includes(userId);
-                             if (isOwner) return true;
-                             
-                             if (isTSM) {
-                                 return possibleOwners.some((id: string) => subordinateIds.includes(id));
-                             }
-                             return false;
-                         });
-                    }
-
                     const merged = [...others, ...current].sort((a, b) => b.sortKey - a.sortKey);
-                    
-                    if (initialId && !selectedRequest) {
-                        const target = merged.find(r => r.id === initialId);
-                        if (target) setSelectedRequest({id: target.id, coll: target.sourceCollection});
-                    }
                     return merged;
                 });
             });
         });
 
         return () => unsubscribes.forEach(unsub => unsub());
-    }, [userId, userRole, userDept, subordinateIds, initialId, selectedRequest]);
+    // NOTE: `selectedRequest` intentionally excluded — selecting a conversation must NOT
+    // recreate all listeners. `initialId` is also excluded for the same reason.
+    }, [userId, userRole, userDept, subordinateIds]);
+
+    // Auto-select the request from URL param once data is loaded
+    useEffect(() => {
+        if (!initialId || selectedRequest || allRequests.length === 0) return;
+        const target = allRequests.find(r => r.id === initialId);
+        if (target) setSelectedRequest({ id: target.id, coll: target.sourceCollection });
+    }, [initialId, allRequests, selectedRequest]);
 
     const getStatusInfo = (status: string) => {
         const s = (status || "").toUpperCase();

@@ -23,7 +23,7 @@ import {
     Building2, Layers, Activity, Bell, Search, X, Sparkles,
     HelpCircle, Lightbulb, Zap, CheckSquare, Square, Info,
     Key, ShieldAlert, FileDown, ArrowRight, MousePointer2,
-    RotateCcw, ListTodo
+    RotateCcw, ListTodo, ToggleRight
 } from "lucide-react"
 
 import {
@@ -55,6 +55,7 @@ type PermissionDoc = {
         testing:        boolean
         productRequest: boolean
         others:         boolean
+        meetingRoom:    boolean
     }
     nav: {
         team:        boolean   // Staff Directory access
@@ -89,7 +90,7 @@ const DEFAULT_PERMISSIONS: PermissionDoc = {
     services: {
         siteVisit: false, jobRequest: false, dialux: false,
         recommendation: false, shopDrawing: false, testing: false,
-        productRequest: false, others: false,
+        productRequest: false, others: false, meetingRoom: false,
     },
     nav: {
         team: false, admin: false, analytics: false,
@@ -110,29 +111,51 @@ const DEFAULT_PERMISSIONS: PermissionDoc = {
 }
 
 /* ─────────────────────────────────────────────────────────
-   DEPARTMENT + ROLE MATRIX
+   DEPARTMENT + ROLE MATRIX (Now Dynamic from Firestore!)
 ───────────────────────────────────────────────────────── */
-const DEPARTMENTS = [
-    "IT",
-    "Engineering",
-    "Sales",
-    "Procurement",
-    "Warehouse Operations",
-]
-
-// Standard roles for most departments
-const STANDARD_ROLES = ["MEMBER", "LEADER", "MANAGER", "SUPER ADMIN"]
-
-// Sales-specific roles for Sales department hierarchy
-const SALES_ROLES = ["TERRITORY SALES ASSOCIATE", "TERRITORY SALES MANAGER", "SALES HEAD", "SUPER ADMIN"]
-
-// Get roles based on department
-const getRolesForDepartment = (dept: string): string[] => {
-    if (dept === "Sales") return SALES_ROLES
-    return STANDARD_ROLES
+type DepartmentConfig = {
+    name: string
+    roles: string[]
+    color?: string
 }
 
-const ROLES = getRolesForDepartment(DEPARTMENTS[0])
+// Standard roles as default
+const DEFAULT_ROLES = ["MEMBER", "LEADER", "MANAGER", "SUPER ADMIN"]
+
+// Default departments (will be replaced from Firestore if available)
+const DEFAULT_DEPARTMENTS: DepartmentConfig[] = [
+    { name: "IT", roles: DEFAULT_ROLES, color: "emerald" },
+    { name: "Engineering", roles: DEFAULT_ROLES, color: "blue" },
+    { name: "Admin", roles: ["STAFF", "MANAGER"], color: "slate" },
+    { name: "Sales", roles: ["TERRITORY SALES ASSOCIATE", "TERRITORY SALES MANAGER", "SALES HEAD", "SUPER ADMIN"], color: "red" },
+    { name: "Procurement", roles: DEFAULT_ROLES, color: "violet" },
+    { name: "Warehouse Operations", roles: DEFAULT_ROLES, color: "amber" },
+]
+
+// Get a color class for departments
+const getDeptColorClass = (deptName: string) => {
+    const colors = [
+        "emerald", "blue", "red", "violet", "amber", 
+        "pink", "indigo", "cyan", "lime", "fuchsia"
+    ]
+    let hash = 0
+    for (let i = 0; i < deptName.length; i++) {
+        hash = deptName.charCodeAt(i) + ((hash << 5) - hash)
+    }
+    const colorIndex = Math.abs(hash) % colors.length
+    const color = colors[colorIndex]
+    return `bg-${color}-100 text-${color}-700 border-${color}-200`
+}
+
+// Get a color class for roles
+const getRoleColorClass = (roleName: string) => {
+    if (roleName.toUpperCase() === "SUPER ADMIN") return "bg-zinc-900 text-white border-zinc-800"
+    if (roleName.toUpperCase().includes("MANAGER") || roleName.toUpperCase().includes("HEAD")) 
+        return "bg-blue-600 text-white border-blue-700"
+    if (roleName.toUpperCase().includes("LEADER")) 
+        return "bg-violet-100 text-violet-700 border-violet-200"
+    return "bg-zinc-100 text-zinc-600 border-zinc-200"
+}
 
 /* ─────────────────────────────────────────────────────────
    PERMISSION SECTIONS CONFIG
@@ -142,74 +165,75 @@ const ROLES = getRolesForDepartment(DEPARTMENTS[0])
 const SECTIONS = [
     {
         key:   "services",
-        label: "Service Access",
-        description: "Controls which service tiles appear on the Dashboard and Sidebar for this role.",
+        label: "App Features",
+        description: "Choose which tools and features this role can use in the app.",
         icon:  Layers,
-        color: "bg-blue-50 text-blue-600 border-blue-100",
+        color: "bg-blue-50 text-blue-700 border-blue-200",
         items: [
-            { key: "siteVisit",      label: "Site Visit Appointments", icon: CalendarCheck },
-            { key: "jobRequest",     label: "Job Requests",            icon: FileText },
-            { key: "dialux",         label: "DIAlux Simulation",       icon: Monitor },
-            { key: "recommendation", label: "Product Recommendation",  icon: ThumbsUp },
-            { key: "shopDrawing",    label: "Shop Drawing Requests",   icon: Wrench },
-            { key: "testing",        label: "Testing Monitoring",      icon: ClipboardCheck },
-            { key: "productRequest", label: "SPF Product Request",     icon: Package },
-            { key: "others",         label: "Other Requests",          icon: MoreHorizontal },
+            { key: "siteVisit",      label: "Site Visits",          icon: CalendarCheck },
+            { key: "jobRequest",     label: "Job Requests",         icon: FileText },
+            { key: "dialux",         label: "DIAlux Simulations",   icon: Monitor },
+            { key: "recommendation", label: "Product Recommendations", icon: ThumbsUp },
+            { key: "shopDrawing",    label: "Shop Drawings",        icon: Wrench },
+            { key: "testing",        label: "Testing & Monitoring", icon: ClipboardCheck },
+            { key: "productRequest", label: "Product Requests",     icon: Package },
+            { key: "others",         label: "Other Requests",       icon: MoreHorizontal },
+            { key: "meetingRoom",    label: "Meeting Rooms",        icon: Building2 },
         ],
     },
     {
         key:   "nav",
-        label: "Navigation Access",
-        description: "Controls which sidebar navigation sections are visible to this role.",
+        label: "Navigation",
+        description: "Choose which pages this role can see in the menu.",
         icon:  LayoutDashboard,
-        color: "bg-violet-50 text-violet-600 border-violet-100",
+        color: "bg-violet-50 text-violet-700 border-violet-200",
         items: [
-            { key: "team",          label: "Team — Staff Directory",    icon: Users },
-            { key: "admin",         label: "Admin — Access & Protocols", icon: ShieldCheck },
-            { key: "analytics",     label: "Analytics Dashboard",        icon: BarChart3 },
-            { key: "systemSettings",label: "System Settings",            icon: Settings2 },
-            { key: "helpCenter",    label: "Help Center",                icon: BookOpen },
+            { key: "team",          label: "Team Directory",       icon: Users },
+            { key: "admin",         label: "Access & Permissions", icon: ShieldCheck },
+            { key: "analytics",     label: "Analytics",            icon: BarChart3 },
+            { key: "systemSettings",label: "System Settings",      icon: Settings2 },
+            { key: "helpCenter",    label: "Help Center",          icon: BookOpen },
         ],
     },
     {
         key:   "security",
-        label: "Security Controls",
-        description: "Controls which features are available on the Security settings page.",
+        label: "Security",
+        description: "Choose which security settings this role can manage.",
         icon:  Shield,
-        color: "bg-red-50 text-red-600 border-red-100",
+        color: "bg-rose-50 text-rose-700 border-rose-200",
         items: [
-            { key: "changePassword",   label: "Change Password",       icon: Lock },
-            { key: "managePin",        label: "Manage Login PIN",      icon: CircleUser },
-            { key: "manageBiometrics", label: "Biometric Registration",icon: Fingerprint },
+            { key: "changePassword",   label: "Change Password",      icon: Lock },
+            { key: "managePin",        label: "Login PIN",            icon: CircleUser },
+            { key: "manageBiometrics", label: "Biometrics",           icon: Fingerprint },
             { key: "manage2FA",        label: "Two-Step Verification", icon: Smartphone },
-            { key: "viewActivityLog",  label: "View Login Activity",   icon: Activity },
+            { key: "viewActivityLog",  label: "Login Activity",       icon: Activity },
         ],
     },
     {
         key:   "account",
-        label: "Account Features",
-        description: "Controls what the user can do on their profile / account page.",
+        label: "Profile",
+        description: "Choose what this role can do with their profile.",
         icon:  CircleUser,
-        color: "bg-emerald-50 text-emerald-600 border-emerald-100",
+        color: "bg-emerald-50 text-emerald-700 border-emerald-200",
         items: [
             { key: "viewProfile", label: "View Profile",        icon: Eye },
-            { key: "editProfile", label: "Edit Profile Details", icon: Pencil },
+            { key: "editProfile", label: "Edit Profile",        icon: Pencil },
             { key: "preferences", label: "App Preferences",     icon: Settings2 },
         ],
     },
     {
         key:   "dashboard",
-        label: "Dashboard Visibility",
-        description: "Controls which sections are visible on the main dashboard.",
+        label: "Home Screen",
+        description: "Choose which sections this role can see on the home screen.",
         icon:  LayoutDashboard,
-        color: "bg-amber-50 text-amber-600 border-amber-100",
+        color: "bg-amber-50 text-amber-700 border-amber-200",
         items: [
-            { key: "showStats",          label: "Summary Stats Cards",   icon: BarChart3 },
-            { key: "showRecentActivity", label: "Recent Activity Feed",  icon: Bell },
-            { key: "showOverviewTabs",   label: "Overview Tabs",         icon: Layers },
-            { key: "showSchedule",       label: "Task Schedule View",    icon: CalendarCheck },
-            { key: "showAlertBanner",    label: "Critical Alert Banner", icon: Activity },
-            { key: "showMyTasks",        label: "My Tasks Section",      icon: ListTodo },
+            { key: "showStats",          label: "Stats Cards",       icon: BarChart3 },
+            { key: "showRecentActivity", label: "Recent Activity",   icon: Bell },
+            { key: "showOverviewTabs",   label: "Overview Tabs",     icon: Layers },
+            { key: "showSchedule",       label: "Schedule",          icon: CalendarCheck },
+            { key: "showAlertBanner",    label: "Alerts",            icon: Activity },
+            { key: "showMyTasks",        label: "My Tasks",          icon: ListTodo },
         ],
     },
 ]
@@ -220,6 +244,7 @@ const SECTIONS = [
 const DEPT_COLORS: Record<string, string> = {
     "IT":                   "bg-emerald-100 text-emerald-700 border-emerald-200",
     "Engineering":          "bg-blue-100 text-blue-700 border-blue-200",
+    "Admin":                "bg-slate-100 text-slate-700 border-slate-200",
     "Sales":                "bg-red-100 text-[#E33636] border-red-200",
     "Procurement":          "bg-violet-100 text-violet-700 border-violet-200",
     "Warehouse Operations": "bg-amber-100 text-amber-700 border-amber-200",
@@ -260,35 +285,58 @@ function GuideItem({ icon: Icon, title, description, colorClass }: { icon: any, 
     )
 }
 
-function DashboardCard({ label, value, subValue, icon: Icon, colorClass, loading, isActive, onClick }: {
-    label: string; value: string | number; subValue?: string; icon: any; colorClass: string; loading?: boolean; isActive?: boolean; onClick?: () => void
+function DashboardCard({ label, value, subValue, icon: Icon, colorClass, loading, isActive, onClick, percent }: {
+    label: string; value: string | number; subValue?: string; icon: any; colorClass: string; loading?: boolean; isActive?: boolean; onClick?: () => void; percent?: number
 }) {
     return (
         <button
             onClick={onClick}
+            disabled={!onClick}
             className={cn(
-                "flex-1 bg-white rounded-2xl p-3 border shadow-sm flex items-center gap-3 group transition-all min-w-0 active:scale-95 text-left",
-                isActive ? "border-zinc-900 ring-4 ring-zinc-900/5 shadow-md" : "border-zinc-200/60 hover:shadow-md hover:border-zinc-300"
+                "bg-white rounded-2xl p-4 border shadow-sm flex flex-col gap-2.5 group transition-all text-left w-full active:scale-[0.98]",
+                isActive
+                    ? "border-zinc-900 ring-2 ring-zinc-900/10 shadow-md"
+                    : onClick
+                    ? "border-zinc-200/60 hover:shadow-md hover:border-zinc-300 cursor-pointer"
+                    : "border-zinc-200/60 cursor-default"
             )}
         >
-            <div className={cn("p-2 rounded-xl flex-shrink-0 transition-colors", isActive ? "bg-zinc-900 text-white" : colorClass)}>
-                <Icon className="size-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 mb-0.5">
+            {/* Top row: icon + value */}
+            <div className="flex items-start justify-between gap-2">
+                <div className={cn(
+                    "size-9 rounded-xl flex items-center justify-center shrink-0 transition-colors",
+                    isActive ? "bg-zinc-900 text-white" : colorClass
+                )}>
+                    <Icon className="size-4" />
+                </div>
+                <div className="text-right min-w-0">
                     {loading ? (
-                        <div className="h-4 w-12 bg-zinc-100 rounded animate-pulse" />
+                        <div className="h-6 w-10 bg-zinc-100 rounded animate-pulse ml-auto" />
                     ) : (
-                        <p className="text-[14px] font-black text-zinc-900 leading-none truncate tracking-tight">{value}</p>
+                        <p className="text-[22px] font-black text-zinc-900 leading-none tracking-tight">{value}</p>
                     )}
-                    {!loading && subValue && (
-                        <span className="hidden xl:inline-block text-[7px] font-black text-zinc-400 uppercase tracking-widest bg-zinc-50 px-1 py-0.5 rounded border border-zinc-100 whitespace-nowrap flex-shrink-0">
-                            {subValue}
-                        </span>
+                    {subValue && !loading && (
+                        <p className="text-[9px] font-bold text-zinc-400 uppercase tracking-widest mt-0.5">{subValue}</p>
                     )}
                 </div>
-                <p className="text-[7px] font-black uppercase text-zinc-400 tracking-[0.1em] truncate">{label}</p>
             </div>
+
+            {/* Progress bar (if percent provided) */}
+            {percent !== undefined && !loading && (
+                <div className="h-1 w-full bg-zinc-100 rounded-full overflow-hidden">
+                    <div
+                        className={cn("h-full rounded-full transition-all duration-500",
+                            isActive ? "bg-zinc-900" :
+                            percent === 0 ? "bg-zinc-200" :
+                            percent === 100 ? "bg-emerald-500" : "bg-blue-500"
+                        )}
+                        style={{ width: `${percent}%` }}
+                    />
+                </div>
+            )}
+
+            {/* Label */}
+            <p className="text-[9px] font-black uppercase tracking-[0.15em] text-zinc-400 leading-none">{label}</p>
         </button>
     )
 }
@@ -423,13 +471,195 @@ function PermissionSection({
 }
 
 /* ─────────────────────────────────────────────────────────
+   DEPARTMENT MANAGER COMPONENT
+───────────────────────────────────────────────────────── */
+function DeptManager({ 
+    departments, 
+    onAdd, 
+    onUpdateRoles, 
+    onDelete 
+}: { 
+    departments: DepartmentConfig[], 
+    onAdd: (name: string) => Promise<void>, 
+    onUpdateRoles: (deptName: string, roles: string[]) => Promise<void>,
+    onDelete: (deptName: string) => Promise<void>
+}) {
+    const [newDeptName, setNewDeptName] = React.useState("")
+    const [editingDept, setEditingDept] = React.useState<string | null>(null)
+    const [editingRoles, setEditingRoles] = React.useState<string[]>([])
+    const [isProcessing, setIsProcessing] = React.useState(false)
+
+    const handleAdd = async () => {
+        if (!newDeptName.trim()) return
+        setIsProcessing(true)
+        try {
+            await onAdd(newDeptName)
+            setNewDeptName("")
+        } finally {
+            setIsProcessing(false)
+        }
+    }
+
+    const handleSaveRoles = async () => {
+        if (!editingDept) return
+        setIsProcessing(true)
+        try {
+            await onUpdateRoles(editingDept, editingRoles)
+            setEditingDept(null)
+        } finally {
+            setIsProcessing(false)
+        }
+    }
+
+    const handleAddRoleToEditing = () => {
+        setEditingRoles([...editingRoles, "NEW ROLE"])
+    }
+
+    const handleUpdateEditingRole = (index: number, value: string) => {
+        const newRoles = [...editingRoles]
+        newRoles[index] = value.toUpperCase()
+        setEditingRoles(newRoles)
+    }
+
+    const handleRemoveEditingRole = (index: number) => {
+        if (editingRoles.length <= 1) return
+        setEditingRoles(editingRoles.filter((_, i) => i !== index))
+    }
+
+    return (
+        <div className="space-y-6">
+            {/* Add new department */}
+            <div className="bg-zinc-50 rounded-2xl p-4 border border-zinc-200">
+                <h3 className="text-[12px] font-black uppercase tracking-widest text-zinc-800 mb-3">Add New Department</h3>
+                <div className="flex gap-2">
+                    <input
+                        value={newDeptName}
+                        onChange={(e) => setNewDeptName(e.target.value)}
+                        placeholder="Department name..."
+                        className="flex-1 px-3 py-2 rounded-xl bg-white border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-violet-500 text-sm font-bold"
+                        onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+                    />
+                    <Button 
+                        onClick={handleAdd} 
+                        disabled={!newDeptName.trim() || isProcessing}
+                        className="bg-violet-600 hover:bg-violet-700 text-white"
+                    >
+                        Add
+                    </Button>
+                </div>
+            </div>
+
+            {/* Department list */}
+            <div className="space-y-3">
+                <h3 className="text-[12px] font-black uppercase tracking-widest text-zinc-800">Manage Departments</h3>
+                {departments.map((dept) => (
+                    <div key={dept.name} className="bg-white rounded-2xl p-4 border border-zinc-200 shadow-sm">
+                        <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                                <div className={cn("px-3 py-1.5 rounded-xl text-[10px] font-black uppercase border", getDeptColorClass(dept.name))}>
+                                    {dept.name}
+                                </div>
+                                <span className="text-[10px] font-black uppercase text-zinc-400">
+                                    {dept.roles.length} roles
+                                </span>
+                            </div>
+                            <div className="flex gap-2">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                        setEditingDept(dept.name)
+                                        setEditingRoles([...dept.roles])
+                                    }}
+                                    className="text-xs font-bold"
+                                >
+                                    Edit Roles
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => onDelete(dept.name)}
+                                    disabled={departments.length <= 1}
+                                    className="text-xs font-bold text-rose-600 border-rose-200 hover:bg-rose-50"
+                                >
+                                    Delete
+                                </Button>
+                            </div>
+                        </div>
+                        
+                        {editingDept === dept.name && (
+                            <div className="border-t border-zinc-100 pt-4 space-y-3">
+                                <h4 className="text-[10px] font-black uppercase text-zinc-600 tracking-widest">Roles for {dept.name}</h4>
+                                <div className="space-y-2">
+                                    {editingRoles.map((role, idx) => (
+                                        <div key={idx} className="flex gap-2">
+                                            <input
+                                                value={role}
+                                                onChange={(e) => handleUpdateEditingRole(idx, e.target.value)}
+                                                className="flex-1 px-3 py-2 rounded-xl bg-zinc-50 border border-zinc-200 focus:outline-none focus:ring-2 focus:ring-violet-500 text-sm font-bold"
+                                            />
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => handleRemoveEditingRole(idx)}
+                                                disabled={editingRoles.length <= 1}
+                                                className="text-rose-600 border-rose-200 hover:bg-rose-50"
+                                            >
+                                                Remove
+                                            </Button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="flex gap-2 pt-2">
+                                    <Button variant="outline" size="sm" onClick={handleAddRoleToEditing} className="text-violet-600">
+                                        + Add Role
+                                    </Button>
+                                    <Button variant="outline" size="sm" onClick={() => setEditingDept(null)}>
+                                        Cancel
+                                    </Button>
+                                    <Button 
+                                        onClick={handleSaveRoles} 
+                                        disabled={isProcessing}
+                                        className="bg-violet-600 hover:bg-violet-700 text-white"
+                                    >
+                                        Save Roles
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+
+                        {editingDept !== dept.name && (
+                            <div className="flex flex-wrap gap-2">
+                                {dept.roles.map((role) => (
+                                    <span 
+                                        key={role} 
+                                        className={cn("px-2 py-1 rounded-lg text-[9px] font-black uppercase border", getRoleColorClass(role))}
+                                    >
+                                        {role}
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
+/* ─────────────────────────────────────────────────────────
    MAIN PAGE
 ───────────────────────────────────────────────────────── */
 export default function PermissionsPage() {
     const [userId, setUserId]             = React.useState<string | null>(null)
-    const [selectedDept, setSelectedDept] = React.useState(DEPARTMENTS[0])
-    // Get roles dynamically based on department
-    const availableRoles = React.useMemo(() => getRolesForDepartment(selectedDept), [selectedDept])
+    // Dynamic departments from Firestore
+    const [departments, setDepartments]   = React.useState<DepartmentConfig[]>(DEFAULT_DEPARTMENTS)
+    const [selectedDept, setSelectedDept] = React.useState(DEFAULT_DEPARTMENTS[0].name)
+    // Get roles dynamically based on selected department
+    const availableRoles = React.useMemo(() => {
+        const dept = departments.find(d => d.name === selectedDept)
+        return dept?.roles || DEFAULT_ROLES
+    }, [departments, selectedDept])
     const [selectedRole, setSelectedRole] = React.useState(availableRoles[0])
     const [perms, setPerms]               = React.useState<PermissionDoc>(DEFAULT_PERMISSIONS)
     const [isLoading, setIsLoading]       = React.useState(false)
@@ -441,10 +671,12 @@ export default function PermissionsPage() {
     const [collapseSignal, setCollapseSignal] = React.useState(0)
     const [allCollapsed, setAllCollapsed] = React.useState(false)
     const [showGuide, setShowGuide] = React.useState(false)
+    const [showDeptManager, setShowDeptManager] = React.useState(false)
 
     // Track all configured combos for the overview grid
     const [allConfigs, setAllConfigs] = React.useState<Record<string, PermissionDoc>>({})
-
+    // Guard: only run Admin migration once per session
+    const adminMigrationRan = React.useRef(false)
     React.useEffect(() => {
         setUserId(localStorage.getItem("userId"))
     }, [])
@@ -476,11 +708,66 @@ export default function PermissionsPage() {
         return () => unsub()
     }, [])
 
-    /* ── Reset role when department changes ── */
+    /* ── Subscribe to department configs from Firestore ── */
     React.useEffect(() => {
-        const newRoles = getRolesForDepartment(selectedDept)
-        setSelectedRole(newRoles[0])
-    }, [selectedDept])
+        const unsub = onSnapshot(collection(db, "department_configs"), snap => {
+            const deptList: DepartmentConfig[] = []
+            snap.docs.forEach(d => {
+                const data = d.data()
+                if (data.name && Array.isArray(data.roles) && !data.deleted) {
+                    deptList.push({
+                        name: data.name,
+                        roles: data.roles,
+                        color: data.color
+                    })
+                }
+            })
+            // If no departments in Firestore, use defaults
+            if (deptList.length > 0) {
+                setDepartments(deptList)
+                // If selected department isn't in new list, pick first
+                if (!deptList.find(d => d.name === selectedDept)) {
+                    setSelectedDept(deptList[0].name)
+                }
+
+                // FIX: Ensure "Admin" department exists with correct roles.
+                // Use a ref to only run this migration ONCE per session, not on every snapshot.
+                const adminDept = deptList.find(d => d.name.toUpperCase() === "ADMIN")
+                const adminHasWrongRoles = adminDept && (
+                    adminDept.roles.length !== 2 ||
+                    !adminDept.roles.includes("STAFF") ||
+                    !adminDept.roles.includes("MANAGER")
+                )
+                if ((!adminDept || adminHasWrongRoles) && !adminMigrationRan.current) {
+                    adminMigrationRan.current = true
+                    const adminDocRef = doc(db, "department_configs", "ADMIN")
+                    setDoc(adminDocRef, {
+                        name: "Admin",
+                        roles: ["STAFF", "MANAGER"],
+                        color: "slate",
+                    }, { merge: true }).catch(console.error)
+                }
+            } else {
+                // Initialize Firestore with default departments if empty
+                const init = async () => {
+                    for (const dept of DEFAULT_DEPARTMENTS) {
+                        const docRef = doc(db, "department_configs", dept.name.toUpperCase())
+                        await setDoc(docRef, dept, { merge: true })
+                    }
+                }
+                init()
+                setDepartments(DEFAULT_DEPARTMENTS)
+            }
+        })
+        return () => unsub()
+    }, [])
+
+    /* ── Reset role only when current role is no longer valid for the selected dept ── */
+    React.useEffect(() => {
+        if (!availableRoles.includes(selectedRole)) {
+            setSelectedRole(availableRoles[0])
+        }
+    }, [availableRoles])
 
     /* ── Load when dept/role selection changes ── */
     React.useEffect(() => {
@@ -565,7 +852,47 @@ export default function PermissionsPage() {
     const docId        = makeDocId(selectedDept, selectedRole)
     const isConfigured = !!allConfigs[docId]
     const totalConfigured = Object.keys(allConfigs).length
-    const totalCombos = DEPARTMENTS.length * availableRoles.length
+    const totalCombos = departments.reduce((sum, dept) => sum + dept.roles.length, 0)
+    const allUniqueRoles = React.useMemo(() => {
+        const roles = new Set<string>()
+        departments.forEach(d => d.roles.forEach(r => roles.add(r)))
+        return Array.from(roles)
+    }, [departments])
+
+    // Department manager functions
+    const handleAddDepartment = async (name: string) => {
+        if (!name.trim()) return
+        const deptName = name.trim()
+        const docRef = doc(db, "department_configs", deptName.toUpperCase())
+        await setDoc(docRef, {
+            name: deptName,
+            roles: DEFAULT_ROLES,
+            color: "blue"
+        })
+        toast.success(`Department "${deptName}" added!`)
+    }
+
+    const handleUpdateDepartmentRoles = async (deptName: string, roles: string[]) => {
+        const docRef = doc(db, "department_configs", deptName.toUpperCase())
+        await setDoc(docRef, { roles }, { merge: true })
+        toast.success(`Roles updated for ${deptName}!`)
+    }
+
+    const handleDeleteDepartment = async (deptName: string) => {
+        if (departments.length <= 1) {
+            toast.error("You need at least one department!")
+            return
+        }
+        const docRef = doc(db, "department_configs", deptName.toUpperCase())
+        await setDoc(docRef, { deleted: true }, { merge: true })
+        // Remove from local state first
+        const newDepts = departments.filter(d => d.name !== deptName)
+        setDepartments(newDepts)
+        if (selectedDept === deptName) {
+            setSelectedDept(newDepts[0].name)
+        }
+        toast.success(`Department "${deptName}" deleted!`)
+    }
     const enabledTotal = React.useMemo(() => {
         return SECTIONS.reduce((sum, section) => sum + Object.values((perms as any)[section.key] || {}).filter(Boolean).length, 0)
     }, [perms])
@@ -584,22 +911,22 @@ export default function PermissionsPage() {
         <ProtectedPageWrapper>
             <SidebarProvider defaultOpen={false}>
                 <AppSidebar userId={userId} />
-                <SidebarInset className="bg-[#F8FAFA] pb-24 md:pb-10 min-h-screen m-0 rounded-none border-none shadow-none overflow-visible font-sans">
+                <SidebarInset className="bg-[#F8FAFA] pb-24 md:pb-10 min-h-screen m-0 rounded-none border-none shadow-none overflow-auto font-sans">
                     <PageHeader
-                        title="Admin / Access Rights"
-                        version="V2.0-STABLE"
+                        title="Access Rights"
+                        version="v2"
                         showBackButton={true}
                         trigger={<SidebarTrigger className="mr-2" />}
                         actions={
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-2">
                                 <Button
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => setShowGuide(true)}
-                                    className="rounded-xl h-9 px-4 transition-all text-[11px] font-bold uppercase text-zinc-500 hover:bg-white border border-transparent hover:border-zinc-200"
+                                    className="rounded-xl h-9 px-3 transition-all text-[11px] font-bold text-zinc-600 hover:bg-white border border-transparent hover:border-zinc-200"
                                 >
-                                    <HelpCircle size={15} className="mr-2" />
-                                    <span className="hidden md:inline">User Guide</span>
+                                    <HelpCircle size={14} className="mr-1" />
+                                    <span className="hidden sm:inline">Help</span>
                                 </Button>
 
                                 <div className="hidden md:flex items-center gap-2">
@@ -608,9 +935,9 @@ export default function PermissionsPage() {
                                             onClick={handleReset}
                                             variant="ghost"
                                             size="sm"
-                                            className="text-zinc-500 text-[10px] font-black uppercase rounded-xl"
+                                            className="text-zinc-500 text-[11px] font-bold rounded-xl"
                                         >
-                                            <RefreshCw className="size-3 mr-1.5" /> Reset
+                                            <RefreshCw className="size-3 mr-1" /> Discard
                                         </Button>
                                     )}
                                     <Button
@@ -618,108 +945,176 @@ export default function PermissionsPage() {
                                         disabled={!isDirty || isSaving}
                                         size="sm"
                                         className={cn(
-                                            "h-10 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all",
+                                            "h-10 rounded-2xl text-[11px] font-bold transition-all px-4",
                                             isDirty
-                                                ? "bg-zinc-900 text-white hover:bg-zinc-800 shadow-lg"
+                                                ? "bg-black text-white hover:bg-zinc-800 shadow-lg"
                                                 : "bg-zinc-100 text-zinc-400 cursor-not-allowed"
                                         )}
                                     >
                                         {isSaving
-                                            ? <><RefreshCw className="size-3 mr-1.5 animate-spin" />Saving...</>
-                                            : <><Save className="size-3 mr-1.5" />Save Changes</>}
+                                            ? <><RefreshCw className="size-3 mr-1 animate-spin" />Saving...</>
+                                            : <><Save className="size-3 mr-1" />Save</>}
                                     </Button>
                                 </div>
                             </div>
                         }
                     />
 
-                    <main className="p-4 md:p-6 lg:p-8 max-w-5xl mx-auto w-full overflow-x-hidden space-y-4 md:space-y-6 pb-36 md:pb-24">
-                        <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-                            <DashboardCard
-                                label="Total Enabled"
-                                value={`${enabledTotal}/${totalPermissions}`}
-                                icon={Sparkles}
-                                colorClass="text-zinc-600 bg-zinc-50"
-                                isActive={true}
-                            />
-                            <DashboardCard
-                                label="Service Access"
-                                value={enabledServices}
-                                subValue={`${SECTIONS.find(s => s.key === "services")?.items.length || 0} MAX`}
-                                icon={Layers}
-                                colorClass="text-blue-600 bg-blue-50"
-                            />
-                            <DashboardCard
-                                label="Security Access"
-                                value={enabledSecurity}
-                                subValue={`${SECTIONS.find(s => s.key === "security")?.items.length || 0} MAX`}
-                                icon={Shield}
-                                colorClass="text-red-600 bg-red-50"
-                            />
-                            <DashboardCard
-                                label="Configured"
-                                value={totalConfigured}
-                                subValue={`${totalCombos} TOTAL`}
-                                icon={Building2}
-                                colorClass="text-emerald-600 bg-emerald-50"
-                            />
-                        </section>
+                    <main className="p-4 md:p-6 lg:p-8 max-w-5xl mx-auto w-full overflow-x-hidden space-y-4 pb-36 md:pb-24">
 
-                        <div className="sticky top-[56px] md:top-[64px] z-[45] flex flex-col xl:flex-row xl:items-center gap-3 bg-white/80 backdrop-blur-md p-2 rounded-[24px] border border-zinc-200/40 shadow-sm transition-all">
-                            <div className="flex-1 relative group">
-                                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 size-3.5 text-zinc-300 group-focus-within:text-zinc-800 transition-colors" />
+                        {/* ── STATS BAR ── */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            {/* Total permissions — primary card */}
+                            <div className="col-span-2 md:col-span-1 bg-zinc-900 text-white rounded-2xl p-4 flex items-center gap-4">
+                                <div className="size-10 bg-white/10 rounded-xl flex items-center justify-center shrink-0">
+                                    <ToggleRight className="size-5 text-white" />
+                                </div>
+                                <div className="min-w-0">
+                                    <p className="text-[26px] font-black leading-none tracking-tight">
+                                        {enabledTotal}
+                                        <span className="text-[14px] font-bold text-white/40 ml-0.5">/{totalPermissions}</span>
+                                    </p>
+                                    <p className="text-[9px] font-black uppercase tracking-[0.18em] text-white/50 mt-1">Permissions On</p>
+                                    <div className="mt-2 h-1 w-full bg-white/10 rounded-full overflow-hidden">
+                                        <div className="h-full bg-white/60 rounded-full transition-all duration-700"
+                                            style={{ width: `${totalPermissions > 0 ? Math.round((enabledTotal / totalPermissions) * 100) : 0}%` }} />
+                                    </div>
+                                </div>
+                            </div>
+                            {/* App Features */}
+                            {(() => {
+                                const total = SECTIONS.find(s => s.key === "services")?.items.length || 0
+                                const pct = total > 0 ? Math.round((enabledServices / total) * 100) : 0
+                                return (
+                                    <div className="bg-white border border-zinc-200/60 rounded-2xl p-4 shadow-sm">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <div className="size-8 bg-blue-50 rounded-xl flex items-center justify-center">
+                                                <LayoutDashboard className="size-4 text-blue-600" />
+                                            </div>
+                                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400">{pct}%</span>
+                                        </div>
+                                        <p className="text-[22px] font-black text-zinc-900 leading-none">{enabledServices}<span className="text-[12px] font-bold text-zinc-400 ml-0.5">/{total}</span></p>
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mt-1">App Features</p>
+                                        <div className="mt-2 h-1 w-full bg-zinc-100 rounded-full overflow-hidden">
+                                            <div className={cn("h-full rounded-full transition-all duration-700", pct === 100 ? "bg-emerald-500" : "bg-blue-500")} style={{ width: `${pct}%` }} />
+                                        </div>
+                                    </div>
+                                )
+                            })()}
+                            {/* Security */}
+                            {(() => {
+                                const total = SECTIONS.find(s => s.key === "security")?.items.length || 0
+                                const pct = total > 0 ? Math.round((enabledSecurity / total) * 100) : 0
+                                return (
+                                    <div className="bg-white border border-zinc-200/60 rounded-2xl p-4 shadow-sm">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <div className="size-8 bg-rose-50 rounded-xl flex items-center justify-center">
+                                                <Lock className="size-4 text-rose-600" />
+                                            </div>
+                                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400">{pct}%</span>
+                                        </div>
+                                        <p className="text-[22px] font-black text-zinc-900 leading-none">{enabledSecurity}<span className="text-[12px] font-bold text-zinc-400 ml-0.5">/{total}</span></p>
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mt-1">Security</p>
+                                        <div className="mt-2 h-1 w-full bg-zinc-100 rounded-full overflow-hidden">
+                                            <div className={cn("h-full rounded-full transition-all duration-700", pct === 100 ? "bg-emerald-500" : "bg-rose-500")} style={{ width: `${pct}%` }} />
+                                        </div>
+                                    </div>
+                                )
+                            })()}
+                            {/* Roles configured */}
+                            {(() => {
+                                const pct = totalCombos > 0 ? Math.round((totalConfigured / totalCombos) * 100) : 0
+                                return (
+                                    <div className="bg-white border border-zinc-200/60 rounded-2xl p-4 shadow-sm">
+                                        <div className="flex items-center justify-between mb-3">
+                                            <div className="size-8 bg-emerald-50 rounded-xl flex items-center justify-center">
+                                                <Users className="size-4 text-emerald-600" />
+                                            </div>
+                                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400">{pct}%</span>
+                                        </div>
+                                        <p className="text-[22px] font-black text-zinc-900 leading-none">{totalConfigured}<span className="text-[12px] font-bold text-zinc-400 ml-0.5">/{totalCombos}</span></p>
+                                        <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mt-1">Roles Set Up</p>
+                                        <div className="mt-2 h-1 w-full bg-zinc-100 rounded-full overflow-hidden">
+                                            <div className={cn("h-full rounded-full transition-all duration-700", pct === 100 ? "bg-emerald-500" : "bg-emerald-400")} style={{ width: `${pct}%` }} />
+                                        </div>
+                                    </div>
+                                )
+                            })()}
+                        </div>
+
+                        {/* ── STICKY TOOLBAR — sticks right below the PageHeader ── */}
+                        <div className="sticky top-[57px] md:top-[65px] z-40 bg-white/95 backdrop-blur-md border border-zinc-200/80 rounded-2xl shadow-sm px-3 py-2.5 flex items-center gap-2">
+                            {/* Search */}
+                            <div className="flex-1 relative">
+                                <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-zinc-400" />
                                 <input
                                     ref={searchInputRef}
                                     value={searchTerm}
                                     onChange={(e) => setSearchTerm(e.target.value)}
-                                    placeholder='Search permission label... ("/" focus)'
-                                    className="w-full pl-10 pr-9 h-10 rounded-xl bg-white shadow-sm ring-1 ring-zinc-200 outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-xs font-bold"
+                                    placeholder="Search permissions..."
+                                    className="w-full pl-8 pr-8 h-9 rounded-xl bg-zinc-50 border border-zinc-200 outline-none focus:bg-white focus:border-zinc-400 transition-all text-[12px] font-medium"
                                 />
-                                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-                                    {searchTerm && (
-                                        <button
-                                            onClick={() => setSearchTerm("")}
-                                            className="text-zinc-300 hover:text-zinc-600 transition-colors"
-                                        >
-                                            <X className="size-3.5" />
-                                        </button>
-                                    )}
-                                    <div className="hidden sm:flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-100 bg-zinc-50 text-[8px] font-black text-zinc-400">
-                                        <span>/</span>
-                                    </div>
-                                </div>
+                                {searchTerm && (
+                                    <button onClick={() => setSearchTerm("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 transition-colors">
+                                        <X className="size-3.5" />
+                                    </button>
+                                )}
                             </div>
-
-                            <div className="flex gap-2">
-                                <Button
-                                    variant="outline"
-                                    onClick={() => handleCollapseAll(true)}
-                                    className="h-10 px-3 rounded-xl bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-600 font-black text-[10px] uppercase tracking-wider transition-all"
-                                >
-                                    Collapse All
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    onClick={() => handleCollapseAll(false)}
-                                    className="h-10 px-3 rounded-xl bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-600 font-black text-[10px] uppercase tracking-wider transition-all"
-                                >
-                                    Expand All
-                                </Button>
-                                <div className="w-px h-8 bg-zinc-200 mx-1 hidden xl:block" />
-                                <Button
-                                    variant="outline"
-                                    onClick={() => {
-                                        setSelectedDept(DEPARTMENTS[0])
-                                        setSelectedRole(getRolesForDepartment(DEPARTMENTS[0])[0])
-                                        setSearchTerm("")
-                                    }}
-                                    className="h-10 w-10 rounded-xl bg-white border-zinc-200 hover:bg-zinc-50 flex items-center justify-center p-0 flex-shrink-0"
+                            {/* Action buttons */}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                                <button onClick={() => handleCollapseAll(true)}
+                                    className="h-9 px-3 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-600 text-[10px] font-black uppercase tracking-wide transition-all hidden sm:flex items-center gap-1.5">
+                                    <ChevronUp className="size-3" /> Collapse
+                                </button>
+                                <button onClick={() => handleCollapseAll(false)}
+                                    className="h-9 px-3 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-600 text-[10px] font-black uppercase tracking-wide transition-all hidden sm:flex items-center gap-1.5">
+                                    <ChevronDown className="size-3" /> Expand
+                                </button>
+                                <button onClick={() => handleCollapseAll(true)}
+                                    className="h-9 w-9 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-600 transition-all sm:hidden flex items-center justify-center">
+                                    <ChevronUp className="size-4" />
+                                </button>
+                                <button onClick={() => handleCollapseAll(false)}
+                                    className="h-9 w-9 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-600 transition-all sm:hidden flex items-center justify-center">
+                                    <ChevronDown className="size-4" />
+                                </button>
+                                <div className="w-px h-5 bg-zinc-200 mx-0.5" />
+                                <button onClick={() => setShowDeptManager(true)}
+                                    className="h-9 px-3 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-600 text-[10px] font-black uppercase tracking-wide transition-all flex items-center gap-1.5">
+                                    <Settings2 className="size-3.5" />
+                                    <span className="hidden sm:inline">Departments</span>
+                                </button>
+                                <button
+                                    onClick={() => { setSelectedDept(departments[0].name); setSelectedRole(departments[0].roles[0]); setSearchTerm("") }}
+                                    className="h-9 w-9 rounded-xl border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-500 transition-all flex items-center justify-center"
                                     title="Reset view"
                                 >
-                                    <RotateCcw className="size-3.5 text-zinc-400" />
-                                </Button>
+                                    <RotateCcw className="size-3.5" />
+                                </button>
                             </div>
                         </div>
+
+                        {/* ── DEPARTMENT MANAGER DIALOG ── */}
+                        <Dialog open={showDeptManager} onOpenChange={setShowDeptManager}>
+                            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto rounded-[32px] border-none shadow-2xl p-0 bg-white scrollbar-thin scrollbar-thumb-zinc-200 scrollbar-track-transparent hover:scrollbar-thumb-zinc-300 transition-colors">
+                                <div className="sticky top-0 bg-white/80 backdrop-blur-xl z-10 px-8 py-6 border-b border-zinc-100 flex items-center justify-between">
+                                    <div>
+                                        <h2 className="text-[20px] font-black text-zinc-900 tracking-tight">
+                                            Department Manager
+                                        </h2>
+                                        <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mt-1">Manage Departments & Their Roles</p>
+                                    </div>
+                                </div>
+                                <div className="p-8 space-y-6">
+                                    <DeptManager 
+                                        departments={departments}
+                                        onAdd={handleAddDepartment}
+                                        onUpdateRoles={handleUpdateDepartmentRoles}
+                                        onDelete={handleDeleteDepartment}
+                                    />
+                                </div>
+                            </DialogContent>
+                        </Dialog>
 
                         {/* ── USER GUIDE DIALOG ── */}
                         <Dialog open={showGuide} onOpenChange={setShowGuide}>
@@ -798,176 +1193,90 @@ export default function PermissionsPage() {
                         </Dialog>
 
                         {/* ══════════════════════════════
-                            OVERVIEW GRID — all combos
+                            CHOOSE WHO YOU'RE EDITING
                         ══════════════════════════════ */}
-                        <section className="bg-white rounded-[24px] border border-zinc-200/50 shadow-sm overflow-hidden w-full">
-                            <div className="px-6 py-4 border-b border-zinc-50 flex items-center gap-3">
-                                <Building2 className="size-4 text-zinc-400" />
-                                <h2 className="font-black text-[11px] uppercase tracking-wide text-zinc-800">
-                                    Configuration Overview
+                        <section className="bg-white rounded-2xl border border-zinc-200 shadow-sm p-6 w-full overflow-hidden">
+                            <div className="flex items-center gap-3 mb-5">
+                                <ShieldCheck className="size-5 text-zinc-500" />
+                                <h2 className="font-bold text-lg text-zinc-900">
+                                    Choose Role to Edit
                                 </h2>
-                                <span className="ml-auto text-[9px] font-black text-zinc-400 uppercase">
-                                    {Object.keys(allConfigs).length} configured
-                                </span>
-                            </div>
-                            <div className="w-full overflow-x-auto">
-                                <table className="w-full min-w-[560px] text-[10px]">
-                                    <thead>
-                                        <tr className="border-b border-zinc-50">
-                                            <th className="text-left px-5 py-3 font-black uppercase tracking-widest text-zinc-400 w-40">
-                                                Department
-                                            </th>
-                                            {availableRoles.map(role => (
-                                                <th key={role} className="text-center px-3 py-3 font-black uppercase tracking-widest text-zinc-400">
-                                                    {role}
-                                                </th>
-                                            ))}
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-zinc-50">
-                                        {DEPARTMENTS.map(dept => (
-                                            <tr key={dept} className="hover:bg-zinc-50/40 transition-colors">
-                                                <td className="px-5 py-3">
-                                                    <span className={cn(
-                                                        "text-[9px] font-black uppercase px-2 py-1 rounded-full border",
-                                                        DEPT_COLORS[dept] || "bg-zinc-100 text-zinc-500 border-zinc-200"
-                                                    )}>
-                                                        {dept.length > 14 ? dept.slice(0, 12) + "…" : dept}
-                                                    </span>
-                                                </td>
-                                                {getRolesForDepartment(dept).map(role => {
-                                                    const id  = makeDocId(dept, role)
-                                                    const cfg = allConfigs[id]
-                                                    const serviceCount = cfg
-                                                        ? Object.values(cfg.services || {}).filter(Boolean).length
-                                                        : null
-                                                    const isSelected = selectedDept === dept && selectedRole === role
-
-                                                    return (
-                                                        <td key={role} className="text-center px-3 py-3">
-                                                            <button
-                                                                onClick={() => { setSelectedDept(dept); setSelectedRole(role) }}
-                                                                className={cn(
-                                                                    "mx-auto size-10 rounded-2xl flex items-center justify-center text-[11px] font-black transition-all border relative overflow-hidden active:scale-90",
-                                                                    isSelected
-                                                                        ? "bg-zinc-900 border-zinc-900 text-white shadow-lg shadow-zinc-200 z-10 scale-110"
-                                                                        : cfg
-                                                                        ? "bg-emerald-50 text-emerald-700 border-emerald-100 hover:border-emerald-200"
-                                                                        : "bg-zinc-50 text-zinc-300 border-zinc-100 hover:bg-zinc-100 hover:text-zinc-500"
-                                                                )}
-                                                                title={cfg ? `${serviceCount} services enabled` : "Not configured"}
-                                                            >
-                                                                {cfg ? (
-                                                                    <span>{serviceCount}</span>
-                                                                ) : (
-                                                                    <div className="size-1 rounded-full bg-current opacity-30" />
-                                                                )}
-                                                                {isSelected && (
-                                                                    <div className="absolute top-0 right-0 p-1">
-                                                                        <MousePointer2 className="size-2 text-white/50" />
-                                                                    </div>
-                                                                )}
-                                                            </button>
-                                                        </td>
-                                                    )
-                                                })}
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                            <div className="px-5 py-3 border-t border-zinc-50 flex items-center gap-4 flex-wrap text-[9px] text-zinc-400 font-bold uppercase">
-                                <div className="flex items-center gap-1.5">
-                                    <div className="size-3 bg-[#121212] rounded" />Selected
+                                <div className="ml-auto flex items-center gap-2">
+                                    {isConfigured && (
+                                        <span className="text-xs font-medium bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-full border border-emerald-200">
+                                            Set up
+                                        </span>
+                                    )}
+                                    {!isConfigured && (
+                                        <span className="text-xs font-medium bg-zinc-50 text-zinc-500 px-3 py-1.5 rounded-full border border-zinc-200">
+                                            Default
+                                        </span>
+                                    )}
                                 </div>
-                                <div className="flex items-center gap-1.5">
-                                    <div className="size-3 bg-emerald-100 border border-emerald-200 rounded" />Configured
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                    <div className="size-3 bg-zinc-50 border border-zinc-100 rounded" />Not set
-                                </div>
-                            </div>
-                        </section>
-
-                        {/* ══════════════════════════════
-                            SELECTOR — dept + role
-                        ══════════════════════════════ */}
-                        <section className="bg-white rounded-[24px] border border-zinc-200/50 shadow-sm p-5 w-full overflow-hidden">
-                            <div className="flex items-center gap-3 mb-4">
-                                <ShieldCheck className="size-4 text-zinc-400" />
-                                <h2 className="font-black text-[11px] uppercase tracking-widest text-zinc-800">
-                                    Editing Permissions For
-                                </h2>
-                                {isConfigured && (
-                                    <span className="ml-auto text-[8px] font-black uppercase bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200">
-                                        Configured
-                                    </span>
-                                )}
-                                {!isConfigured && (
-                                    <span className="ml-auto text-[8px] font-black uppercase bg-zinc-100 text-zinc-500 px-2 py-0.5 rounded-full border border-zinc-200">
-                                        Using Defaults
-                                    </span>
-                                )}
                             </div>
 
                             {/* Department pills */}
-                            <div className="space-y-3">
-                                <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400">Department</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {DEPARTMENTS.map(dept => (
-                                        <button
-                                            key={dept}
-                                            onClick={() => setSelectedDept(dept)}
-                                            className={cn(
-                                                "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wide border transition-all",
-                                                selectedDept === dept
-                                                    ? (DEPT_COLORS[dept] || "bg-zinc-900 text-white border-zinc-900") + " scale-105 shadow-sm"
-                                                    : "bg-zinc-50 text-zinc-500 border-zinc-200 hover:bg-zinc-100"
-                                            )}
-                                        >
-                                            {dept}
-                                        </button>
-                                    ))}
+                            <div className="space-y-4">
+                                <div>
+                                    <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mb-2">Department</p>
+                                    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                                        {departments.map(dept => (
+                                            <button
+                                                key={dept.name}
+                                                onClick={() => setSelectedDept(dept.name)}
+                                                className={cn(
+                                                    "px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all shrink-0 border",
+                                                    selectedDept === dept.name
+                                                        ? getDeptColorClass(dept.name) + " shadow-sm"
+                                                        : "bg-zinc-50 text-zinc-500 border-zinc-200 hover:bg-zinc-100 hover:text-zinc-700"
+                                                )}
+                                            >
+                                                {dept.name}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
 
                                 {/* Role pills */}
-                                <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mt-2">Role</p>
-                                <div className="flex flex-wrap gap-2">
-                                    {availableRoles.map(role => (
-                                        <button
-                                            key={role}
-                                            onClick={() => setSelectedRole(role)}
-                                            className={cn(
-                                                "px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wide border transition-all",
-                                                selectedRole === role
-                                                    ? (ROLE_COLORS[role] || "bg-zinc-900 text-white") + " scale-105 shadow-sm"
-                                                    : "bg-zinc-50 text-zinc-500 border-zinc-200 hover:bg-zinc-100"
-                                            )}
-                                        >
-                                            {role}
-                                        </button>
-                                    ))}
+                                <div>
+                                    <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mb-2">Role</p>
+                                    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                                        {availableRoles.map(role => (
+                                            <button
+                                                key={role}
+                                                onClick={() => setSelectedRole(role)}
+                                                className={cn(
+                                                    "px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all shrink-0 border",
+                                                    selectedRole === role
+                                                        ? getRoleColorClass(role) + " shadow-sm"
+                                                        : "bg-zinc-50 text-zinc-500 border-zinc-200 hover:bg-zinc-100 hover:text-zinc-700"
+                                                )}
+                                            >
+                                                {role}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
 
                             {/* Current selection summary */}
-                            <div className="mt-4 pt-4 border-t border-zinc-50 flex items-center gap-3 flex-wrap">
-                                <div className="flex items-center gap-2">
-                                    <span className={cn("text-[9px] font-black uppercase px-2 py-1 rounded-full border",
-                                        DEPT_COLORS[selectedDept] || "bg-zinc-100 text-zinc-500 border-zinc-200")}>
+                            <div className="mt-5 pt-4 border-t border-zinc-100 flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-2 min-w-0">
+                                    <span className={cn("text-[10px] font-black px-2.5 py-1 rounded-full border shrink-0",
+                                        getDeptColorClass(selectedDept))}>
                                         {selectedDept}
                                     </span>
-                                    <span className="text-zinc-300 text-xs">·</span>
-                                    <span className={cn("text-[9px] font-black uppercase px-2 py-1 rounded-full border",
-                                        ROLE_COLORS[selectedRole] || "bg-zinc-100 text-zinc-500 border-zinc-200")}>
+                                    <span className="text-zinc-300 text-sm shrink-0">·</span>
+                                    <span className={cn("text-[10px] font-black px-2.5 py-1 rounded-full border shrink-0",
+                                        getRoleColorClass(selectedRole))}>
                                         {selectedRole}
                                     </span>
                                 </div>
                                 {!isLoading && (
-                                    <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-3 flex-wrap text-[9px] font-black uppercase text-zinc-400">
+                                    <div className="w-full sm:w-auto sm:ml-auto flex items-center gap-3 flex-wrap text-[10px] font-black text-zinc-400 uppercase tracking-wide">
                                         {SECTIONS.map(s => (
                                             <span key={s.key}>
-                                                {s.label.split(" ")[0]}: <span className="text-zinc-700">{countEnabled(s.key)}/{s.items.length}</span>
+                                                {s.label}: <span className="text-zinc-800">{countEnabled(s.key)}/{s.items.length}</span>
                                             </span>
                                         ))}
                                     </div>

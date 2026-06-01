@@ -12,14 +12,14 @@ import { NavSecondary } from "./nav-secondary"
 import { NavUser }      from "./nav-user"
 
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot, doc, getDoc } from "firebase/firestore"
+import { collection, onSnapshot, doc, getDoc, getDocs, query } from "firebase/firestore"
 
 import {
   LayoutDashboard, CalendarCheck, FileText, Monitor, ClipboardCheck,
   Package, MoreHorizontal, ThumbsUp, Wrench,
   Users, ShieldCheck, BarChart3, Settings2, BookOpen, CircleUser,
   Zap, Target, Briefcase, Clock, TrendingUp, Star, Plus, ArrowRight,
-  Activity,
+  Activity, DoorOpen,
 } from "lucide-react"
 
 /* ─────────────────────────────────────────────────────────
@@ -58,6 +58,7 @@ const SERVICE_MAP: Record<string, { title: string; icon: any; path: string }> = 
   testing:        { title: "Testing Monitor",     icon: ClipboardCheck, path: "/request/testing" },
   productRequest: { title: "SPF Product",         icon: Package,        path: "/request/product" },
   others:         { title: "Other Request",       icon: MoreHorizontal, path: "/request/other" },
+  meetingRoom:    { title: "Meeting Rooms",       icon: DoorOpen,       path: "/appointments/meeting-rooms" },
 }
 
 const DEFAULT_PERMS: PermDoc = {
@@ -154,6 +155,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
          * - Logic Role: Use abbreviated for permissions (TSM, TSA, MANAGER)
          */
         const isSalesDept = dept === "SALES"
+        const isAdminDept = dept === "ADMIN"
         
         // Sales-specific role detection based on Position
         const isTSM = isSalesDept 
@@ -164,6 +166,8 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
         
         const isManager = isSalesDept
           ? (position.includes("SALES HEAD") || (position.includes("MANAGER") && !position.includes("TERRITORY")))
+          : isAdminDept
+          ? position.includes("MANAGER")
           : (firestoreRoleFull === "MANAGER" || firestoreRoleFull === "SALES HEAD")
         
         // Determine abbreviated role for logic/permissions
@@ -172,10 +176,10 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
         else if (isTSM) logicRole = "TSM"
         else if (isTSA) logicRole = "TSA"
         
-        // Display role: Use Firestore full name or Position
+        // Display role: Use Position for Sales and Admin depts (matches Firestore permission doc IDs)
         let displayRole = firestoreRoleFull
-        if (isSalesDept && position && !position.includes("MEMBER")) {
-          displayRole = position  // Use full Position for Sales
+        if ((isSalesDept || isAdminDept) && position && !position.includes("MEMBER")) {
+          displayRole = position  // e.g. "TERRITORY SALES ASSOCIATE", "STAFF", "ADMIN MANAGER"
         }
         
         // Update localStorage for consistency with other components
@@ -204,7 +208,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
     run()
   }, [userId])
 
-  /* ── 2. Subscribe to role_permissions ── */
+  /* ── 2. Fetch role_permissions — single doc read, not full collection ── */
   React.useEffect(() => {
     if (!userId) {
       setPermDoc(DEFAULT_PERMS)
@@ -217,10 +221,24 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
     const roleKey  = userDetails.Role.toUpperCase().trim()
     const targetId = `${deptKey}_${roleKey}`
 
-    const unsub = onSnapshot(collection(db, "role_permissions"), snap => {
-      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]
-      const raw  = docs.find((p: any) => p.id === targetId)
-                || docs.find((p: any) => p.id.endsWith(`_${roleKey}`))
+    // FIX: Subscribe only to the single permission doc for this user's dept+role
+    // instead of the entire role_permissions collection.
+    // 1 document read per session instead of N documents on every change.
+    const permDocRef = doc(db, "role_permissions", targetId)
+    const unsub = onSnapshot(permDocRef, async (snap) => {
+      let raw: any = snap.exists() ? { id: snap.id, ...snap.data() } : null
+
+      // Fallback: if exact doc not found (e.g. role name mismatch), do a one-time
+      // getDocs with a suffix filter — much cheaper than a persistent full-collection listener.
+      if (!raw) {
+        try {
+          const allSnap = await getDocs(collection(db, "role_permissions"))
+          const allDocs = allSnap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]
+          raw = allDocs.find((p: any) => p.id.endsWith(`_${roleKey}`)) || null
+        } catch {
+          // silently fall back to DEFAULT_PERMS
+        }
+      }
 
       setPermDoc(raw ? {
         services:  { ...DEFAULT_PERMS.services,  ...(raw.services  || {}) },
@@ -289,9 +307,10 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
       title: "Admin", url: "#", icon: ShieldCheck,
       isActive: p.startsWith("/admin/permissions") || p.startsWith("/admin/protocols"),
       items: [
-        { title: "Access Rights", url: appendId("/admin/permissions") },
-        { title: "Protocols",     url: appendId("/admin/protocols") },
-        { title: "Team Matrix",   url: appendId("/admin/assignment-matrix") },
+        { title: "Access Rights",  url: appendId("/admin/permissions") },
+        { title: "Protocols",      url: appendId("/admin/protocols") },
+        { title: "Team Matrix",    url: appendId("/admin/assignment-matrix") },
+        { title: "Meeting Rooms",  url: appendId("/admin/meeting-rooms") },
       ],
     }
 

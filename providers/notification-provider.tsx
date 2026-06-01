@@ -47,6 +47,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [showPrompt, setShowPrompt]   = useState(false);
   const [userId, setUserId]           = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  // FIX: Cache the subscription check result so we don't re-read Firestore on every route change.
+  const subscriptionChecked = useRef(false);
 
   /* ── Check current subscription status ── */
   const checkSubscription = useCallback(async () => {
@@ -58,7 +60,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     // Don't check on public/auth pages or if not logged in
     if (!uid || PUBLIC_PAGES.includes(pathname ?? "")) return;
 
-    const safeUid  = uid as string;   // narrowed: null already excluded above
+    // FIX: Only check Firestore once per session mount, not on every route change.
+    // Subsequent navigations reuse the cached result. The check resets when the
+    // component unmounts (e.g., on logout/page refresh).
+    if (subscriptionChecked.current) return;
+    subscriptionChecked.current = true;
+
+    const safeUid  = uid as string;
     const deviceId = getDeviceId();
 
     try {

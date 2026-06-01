@@ -648,8 +648,10 @@ export default function SiteVisitListPage() {
     // Fetch protocols from Firestore for ID to name resolution
     const fetchProtocols = async () => {
       try {
+        // FIX: Add limit — protocols is a small admin collection but cap it anyway
+        const { limit: fsLimit } = await import("firebase/firestore");
         const protocolsRef = collection(db, 'protocols')
-        const protocolsSnap = await getDocs(protocolsRef)
+        const protocolsSnap = await getDocs(query(protocolsRef, fsLimit(100)))
         const protocolsMap: Record<string, string> = {}
         protocolsSnap.docs.forEach(doc => {
           const data = doc.data()
@@ -663,32 +665,27 @@ export default function SiteVisitListPage() {
     fetchProtocols()
   }, [])
 
-  // 2. LIVE DATA SYNC WITH ROLE-BASED FILTERING
+  // 2. LIVE DATA SYNC — server-side filtered to avoid full collection downloads
   React.useEffect(() => {
     if (isUserLoading || !user.id) return;
 
     setIsDataLoading(true)
     const baseCollection = collection(db, "appointments")
-    let q;
 
     const userDept = user.dept.toUpperCase();
     const userRole = user.role.toUpperCase();
-    
-    /**
-     * VISIBILITY PROTOCOL:
-     * - IT, ENGINEERING, SUPER ADMIN, MANAGER, LEADER: Global visibility
-     * - TSM (SALES): Can see their own AND all TSA visits
-     * - TSA (SALES): Restricted to personal records (submittedBy matches userId)
-     * - OTHERS (MEMBER): Restricted to personal records (submittedBy matches userId)
-     */
     const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || ["SUPER ADMIN", "LEADER"].includes(userRole);
     const isTSM = userRole === "TSM" || userRole.includes("TERRITORY SALES MANAGER");
     const isManager = userRole === "MANAGER";
 
+    // FIX: Apply server-side where filter for non-admin users
+    let q;
     if (hasGlobalAccess) {
       q = query(baseCollection, orderBy("createdAt", "desc"));
+    } else if ((isTSM || isManager) && subordinateIds.length > 0) {
+      q = query(baseCollection, where("submittedBy", "in", [user.id, ...subordinateIds.slice(0, 9)]), orderBy("createdAt", "desc"));
     } else {
-      q = query(baseCollection, orderBy("createdAt", "desc"));
+      q = query(baseCollection, where("submittedBy", "==", user.id), orderBy("createdAt", "desc"));
     }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {

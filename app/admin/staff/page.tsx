@@ -15,7 +15,8 @@ import {
     LogOut, Ban, Shield, Filter, Mail, Building2, UserCog,
     RotateCcw, ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle,
     Square, CheckSquare, ShieldOff, LockKeyhole, FileDown,
-    HelpCircle, Lightbulb, Zap, BarChart2, Sparkles, Activity
+    HelpCircle, Lightbulb, Zap, BarChart2, Sparkles, Activity,
+    List, TreePine
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
@@ -65,6 +66,11 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+    Tabs,
+    TabsList,
+    TabsTrigger,
+} from "@/components/ui/tabs"
 
 const ITEMS_PER_PAGE = 10
 
@@ -134,27 +140,29 @@ function DashboardCard({ label, value, subValue, icon: Icon, colorClass, loading
         <button
             onClick={onClick}
             className={cn(
-                "flex-1 bg-white rounded-2xl p-3 border shadow-sm flex items-center gap-3 group transition-all min-w-0 active:scale-95 text-left",
-                isActive ? "border-zinc-900 ring-4 ring-zinc-900/5 shadow-md" : "border-zinc-200/60 hover:shadow-md hover:border-zinc-300"
+                "flex-1 bg-white rounded-xl p-4 border shadow-sm flex items-center gap-3 group transition-all min-w-0 active:scale-95 text-left",
+                isActive 
+                    ? "border-zinc-800 ring-4 ring-zinc-100 shadow-md" 
+                    : "border-zinc-200 hover:shadow-md hover:border-zinc-300"
             )}
         >
-            <div className={cn("p-2 rounded-xl flex-shrink-0 transition-colors", isActive ? "bg-zinc-900 text-white" : colorClass)}>
+            <div className={cn("p-2.5 rounded-lg flex-shrink-0 transition-colors", isActive ? "bg-zinc-900 text-white" : colorClass)}>
                 <Icon className="size-4" />
             </div>
             <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 mb-0.5">
+                <div className="flex items-center gap-1.5 mb-1">
                     {loading ? (
-                        <div className="h-4 w-12 bg-zinc-100 rounded animate-pulse" />
+                        <div className="h-5 w-14 bg-zinc-100 rounded animate-pulse" />
                     ) : (
-                        <p className="text-[14px] font-black text-zinc-900 leading-none truncate tracking-tight">{value}</p>
+                        <p className="text-lg font-bold text-zinc-900 leading-none truncate tracking-tight">{value}</p>
                     )}
                     {!loading && subValue && (
-                        <span className="hidden xl:inline-block text-[7px] font-black text-zinc-400 uppercase tracking-widest bg-zinc-50 px-1 py-0.5 rounded border border-zinc-100 whitespace-nowrap flex-shrink-0">
+                        <span className="hidden xl:inline-block text-[7px] font-bold text-zinc-400 uppercase tracking-widest bg-zinc-50 px-1 py-0.5 rounded border border-zinc-100 whitespace-nowrap flex-shrink-0">
                             {subValue}
                         </span>
                     )}
                 </div>
-                <p className="text-[7px] font-black uppercase text-zinc-400 tracking-[0.1em] truncate">{label}</p>
+                <p className="text-xs font-semibold uppercase text-zinc-500 tracking-wide truncate">{label}</p>
             </div>
         </button>
     )
@@ -189,6 +197,8 @@ export default function StaffDirectoryPage() {
     const [userId, setUserId] = React.useState<string | null>(null)
     const [searchTerm, setSearchTerm] = React.useState("")
     const [activeDept, setActiveDept] = React.useState<string>("ALL")
+    const [activeTab, setActiveTab] = React.useState<"ACTIVE" | "INACTIVE" | "ALL">("ACTIVE")
+    const [viewMode, setViewMode] = React.useState<"LIST" | "TREE">("LIST")
     const [staff, setStaff] = React.useState<any[]>([])
     const [isFetching, setIsFetching] = React.useState(true)
     const [sortField, setSortField] = React.useState<SortField>("name")
@@ -232,9 +242,27 @@ export default function StaffDirectoryPage() {
                 activeDept === "AUTHORIZED" ? person.isActive === true :
                 activeDept === "SUSPENDED" ? person.isActive === false :
                     person.Department?.toUpperCase() === activeDept
-            return matchesSearch && matchesDept
+            
+            const empStatus = (person.employmentStatus || (person.Status || "ACTIVE").toUpperCase())
+            const matchesTab = 
+                activeTab === "ACTIVE" ? empStatus === "ACTIVE" :
+                activeTab === "INACTIVE" ? empStatus !== "ACTIVE" :
+                true
+                
+            return matchesSearch && matchesDept && matchesTab
         })
-    }, [staff, searchTerm, activeDept])
+    }, [staff, searchTerm, activeDept, activeTab])
+
+    // Group staff by department for organization tree view
+    const staffByDepartment = React.useMemo(() => {
+        const groups: Record<string, any[]> = {}
+        filteredStaff.forEach(person => {
+            const dept = person.Department?.toUpperCase() || "UNASSIGNED"
+            if (!groups[dept]) groups[dept] = []
+            groups[dept].push(person)
+        })
+        return groups
+    }, [filteredStaff])
 
     const sortedStaff = React.useMemo(() => {
         const getName = (person: any) => `${person.Firstname || ""} ${person.Lastname || ""}`.trim().toLowerCase()
@@ -272,20 +300,21 @@ export default function StaffDirectoryPage() {
                 securityMap[doc.id] = doc.data()
             })
 
-            // Filter out resigned staff and merge security data
+            // Include ALL staff (including resigned/terminated) and merge security data
             const mergedData = mongoUsers
-                .filter((u: any) => (u.Status || "").toUpperCase() !== "RESIGNED")
                 .map((u: any) => {
                     const security = securityMap[u._id] || {
                         isActive: false,
                         Role: "MEMBER"
                     }
+                    const status = (u.Status || "ACTIVE").toUpperCase()
                     return {
                         ...u,
-                        isActive: security.isActive,
+                        isActive: status === "ACTIVE" ? (security.isActive ?? false) : false,
                         Role: security.Role,
                         lastSecurityUpdate: security.lastSecurityUpdate,
-                        hasSecurityDoc: !!securityMap[u._id]
+                        hasSecurityDoc: !!securityMap[u._id],
+                        employmentStatus: status
                     }
                 })
 
@@ -522,181 +551,224 @@ export default function StaffDirectoryPage() {
                         )}
 
                         <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+                            {/* Total Staff */}
                             <DashboardCard
                                 label="Total Staff"
                                 value={isFetching ? "--" : staff.length}
                                 icon={Users}
-                                colorClass="text-zinc-600 bg-zinc-50"
+                                colorClass="text-zinc-700 bg-zinc-50"
                                 loading={isFetching}
-                                isActive={activeDept === "ALL"}
-                                onClick={() => setActiveDept("ALL")}
+                                isActive={activeDept === "ALL" && activeTab === "ALL"}
+                                onClick={() => {
+                                    setActiveDept("ALL")
+                                    setActiveTab("ALL")
+                                }}
                             />
+                            {/* Active Employees */}
                             <DashboardCard
-                                label="Engineering"
-                                value={isFetching ? "--" : staff.filter(s => s.Department?.toUpperCase() === "ENGINEERING").length}
-                                icon={Cpu}
-                                colorClass="text-blue-600 bg-blue-50"
+                                label="Active"
+                                value={isFetching ? "--" : staff.filter(s => (s.employmentStatus || (s.Status || "ACTIVE").toUpperCase()) === "ACTIVE").length}
+                                icon={Users}
+                                colorClass="text-emerald-700 bg-emerald-50"
                                 loading={isFetching}
-                                isActive={activeDept === "ENGINEERING"}
-                                onClick={() => setActiveDept("ENGINEERING")}
+                                isActive={activeDept === "ALL" && activeTab === "ACTIVE"}
+                                onClick={() => {
+                                    setActiveDept("ALL")
+                                    setActiveTab("ACTIVE")
+                                }}
                             />
+                            {/* Authorized */}
                             <DashboardCard
                                 label="Authorized"
                                 value={isFetching ? "--" : staff.filter(s => s.isActive === true).length}
                                 icon={ShieldCheck}
-                                colorClass="text-emerald-600 bg-emerald-50"
+                                colorClass="text-blue-700 bg-blue-50"
                                 loading={isFetching}
                                 isActive={activeDept === "AUTHORIZED"}
-                                onClick={() => setActiveDept("AUTHORIZED")}
+                                onClick={() => {
+                                    setActiveDept("AUTHORIZED")
+                                    setActiveTab("ACTIVE")
+                                }}
                             />
+                            {/* Revoked */}
                             <DashboardCard
                                 label="Revoked"
                                 value={isFetching ? "--" : staff.filter(s => s.isActive === false).length}
                                 icon={Ban}
-                                colorClass="text-rose-600 bg-rose-50"
+                                colorClass="text-rose-700 bg-rose-50"
                                 loading={isFetching}
                                 isActive={activeDept === "SUSPENDED"}
-                                onClick={() => setActiveDept("SUSPENDED")}
+                                onClick={() => {
+                                    setActiveDept("SUSPENDED")
+                                    setActiveTab("ALL")
+                                }}
                             />
                         </section>
 
-                        <div className="sticky top-[56px] md:top-[64px] z-[45] flex flex-col xl:flex-row xl:items-center gap-3 bg-white/80 backdrop-blur-md p-2 rounded-[24px] border border-zinc-200/40 shadow-sm transition-all">
-                            <div className="flex gap-1.5 overflow-x-auto pb-1 xl:pb-0 scrollbar-none flex-1">
-                                <StatPill
-                                    label="All Staff"
-                                    count={staff.length}
-                                    isActive={activeDept === "ALL"}
-                                    onClick={() => setActiveDept("ALL")}
-                                    loading={isFetching}
-                                />
-                                <StatPill
-                                    label="Authorized"
-                                    count={staff.filter(s => s.isActive === true).length}
-                                    isActive={activeDept === "AUTHORIZED"}
-                                    onClick={() => setActiveDept("AUTHORIZED")}
-                                    loading={isFetching}
-                                />
-                                <StatPill
-                                    label="Revoked"
-                                    count={staff.filter(s => s.isActive === false).length}
-                                    isActive={activeDept === "SUSPENDED"}
-                                    onClick={() => setActiveDept("SUSPENDED")}
-                                    loading={isFetching}
-                                />
-                                <div className="h-8 w-px bg-zinc-200 mx-1 flex-shrink-0" />
-                                {departments.slice(0, 4).map(d => (
-                                    <StatPill
-                                        key={d}
-                                        label={d}
-                                        count={staff.filter(s => s.Department?.toUpperCase() === d).length}
-                                        isActive={activeDept === d}
-                                        onClick={() => setActiveDept(d)}
-                                        loading={isFetching}
-                                    />
-                                ))}
-                            </div>
-
-                            <div className="flex flex-col md:flex-row gap-2 xl:min-w-[500px]">
+                        <div className="sticky top-14 md:top-16 z-40 bg-white border-b border-zinc-200 shadow-sm px-4 md:px-6 lg:px-8 py-3 -mx-4 md:-mx-6 lg:-mx-8">
+                            <div className="max-w-6xl mx-auto flex flex-col lg:flex-row lg:items-center gap-3">
+                                {/* Search (left, full width on mobile) */}
                                 <div className="relative flex-1 group">
-                                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 size-3.5 text-zinc-300 group-focus-within:text-zinc-800 transition-colors" />
+                                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4 text-zinc-400 group-focus-within:text-zinc-800 transition-colors" />
                                     <input
                                         ref={searchInputRef}
-                                        placeholder='Search staff by name or email...'
+                                        placeholder='Search by name...'
                                         value={searchTerm}
                                         onChange={e => setSearchTerm(e.target.value)}
-                                        className="w-full pl-10 pr-9 h-10 rounded-xl bg-white shadow-sm ring-1 ring-zinc-200 outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-xs font-bold"
+                                        className="w-full pl-10 pr-10 h-11 rounded-xl bg-zinc-50 border border-zinc-200 outline-none focus:bg-white focus:border-zinc-300 focus:ring-4 focus:ring-zinc-100 transition-all text-sm"
                                     />
-                                    <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-                                        {searchTerm && (
-                                            <button
-                                                onClick={() => setSearchTerm("")}
-                                                className="text-zinc-300 hover:text-zinc-600 transition-colors"
-                                            >
-                                                <X className="size-3.5" />
-                                            </button>
-                                        )}
-                                        <div className="hidden sm:flex items-center gap-1 px-1.5 py-0.5 rounded border border-zinc-100 bg-zinc-50 text-[8px] font-black text-zinc-400">
-                                            <span>/</span>
-                                        </div>
-                                    </div>
+                                    {searchTerm && (
+                                        <button
+                                            onClick={() => setSearchTerm("")}
+                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-700 transition-colors p-1"
+                                        >
+                                            <X className="size-4" />
+                                        </button>
+                                    )}
                                 </div>
 
-                                <div className="flex gap-2">
+                                {/* Filters & Actions (right) */}
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    {/* Department Filter */}
                                     <Select value={activeDept} onValueChange={setActiveDept}>
-                                        <SelectTrigger className="h-10 px-3 rounded-xl bg-white border-zinc-200 font-bold text-[10px] uppercase w-[140px] shadow-sm">
-                                            <div className="flex items-center gap-2">
-                                                <Filter className="size-3 text-zinc-400" />
-                                                <SelectValue placeholder="Dept" />
-                                            </div>
+                                        <SelectTrigger className="h-11 px-3 rounded-xl bg-white border-zinc-200 font-medium text-sm min-w-[120px]">
+                                            <Filter className="size-4 text-zinc-400 mr-2" />
+                                            <SelectValue placeholder="All" />
                                         </SelectTrigger>
-                                        <SelectContent className="rounded-xl border-zinc-100">
-                                            <SelectItem value="ALL" className="font-bold text-[10px] uppercase py-2">All Depts</SelectItem>
+                                        <SelectContent className="rounded-xl border-zinc-200">
+                                            <SelectItem value="ALL" className="font-medium text-sm py-2">All</SelectItem>
+                                            <SelectItem value="AUTHORIZED" className="font-medium text-sm py-2">With Access</SelectItem>
+                                            <SelectItem value="SUSPENDED" className="font-medium text-sm py-2">No Access</SelectItem>
                                             {departments.map(d => (
-                                                <SelectItem key={d} value={d} className="font-bold text-[10px] uppercase py-2">{d}</SelectItem>
+                                                <SelectItem key={d} value={d} className="font-medium text-sm py-2">{d}</SelectItem>
                                             ))}
                                         </SelectContent>
                                     </Select>
 
-                                    <Button
-                                        variant="outline"
-                                        onClick={() => setShowGuide(true)}
-                                        className="h-10 px-3 rounded-xl bg-blue-50 border-blue-100 hover:bg-blue-100 text-blue-600 font-black text-[10px] uppercase tracking-wider transition-all"
-                                    >
-                                        <HelpCircle className="size-3.5 mr-1.5" />
-                                        Guide
-                                    </Button>
+                                    {/* Status Filter */}
+                                    <Select value={activeTab} onValueChange={(v) => setActiveTab(v as "ACTIVE" | "INACTIVE" | "ALL")}>
+                                        <SelectTrigger className="h-11 px-3 rounded-xl bg-white border-zinc-200 font-medium text-sm min-w-[120px]">
+                                            <SelectValue>
+                                                {activeTab === "ACTIVE" ? (
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="size-2 rounded-full bg-emerald-500" />
+                                                        <span>Active</span>
+                                                    </div>
+                                                ) : activeTab === "INACTIVE" ? (
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="size-2 rounded-full bg-rose-500" />
+                                                        <span>Inactive</span>
+                                                    </div>
+                                                ) : (
+                                                    <span>All</span>
+                                                )}
+                                            </SelectValue>
+                                        </SelectTrigger>
+                                        <SelectContent className="rounded-xl border-zinc-200">
+                                            <SelectItem value="ACTIVE" className="font-medium text-sm py-2">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="size-2 rounded-full bg-emerald-500" />
+                                                    Active
+                                                </div>
+                                            </SelectItem>
+                                            <SelectItem value="INACTIVE" className="font-medium text-sm py-2">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="size-2 rounded-full bg-rose-500" />
+                                                    Inactive
+                                                </div>
+                                            </SelectItem>
+                                            <SelectItem value="ALL" className="font-medium text-sm py-2">All</SelectItem>
+                                        </SelectContent>
+                                    </Select>
 
-                                    <Button
-                                        variant="outline"
-                                        onClick={handleExport}
-                                        className="h-10 px-3 rounded-xl bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-600 font-black text-[10px] uppercase tracking-wider transition-all flex items-center gap-1.5"
-                                        disabled={sortedStaff.length === 0}
-                                    >
-                                        <FileDown className="size-3.5" />
-                                        <span>Export</span>
-                                    </Button>
+                                    {/* View Mode */}
+                                    <div className="flex items-center bg-zinc-100 rounded-xl p-1">
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => setViewMode("LIST")}
+                                            className={cn(
+                                                "rounded-lg h-9 px-3 text-sm font-medium transition-all",
+                                                viewMode === "LIST" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                                            )}
+                                        >
+                                            <List className="size-4 mr-1.5" /> List
+                                        </Button>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => setViewMode("TREE")}
+                                            className={cn(
+                                                "rounded-lg h-9 px-3 text-sm font-medium transition-all",
+                                                viewMode === "TREE" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+                                            )}
+                                        >
+                                            <TreePine className="size-4 mr-1.5" /> Org Tree
+                                        </Button>
+                                    </div>
 
-                                    <Button
-                                        variant="outline"
-                                        onClick={resetFilters}
-                                        className="h-10 w-10 rounded-xl bg-white border-zinc-200 hover:bg-zinc-50 flex items-center justify-center p-0 flex-shrink-0"
-                                        title="Reset filters"
-                                    >
-                                        <RotateCcw className="size-3.5 text-zinc-400" />
-                                    </Button>
+                                    {/* Icons */}
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => setShowGuide(true)}
+                                            className="h-11 w-11 rounded-xl bg-blue-50 border-blue-200 hover:bg-blue-100 text-blue-700"
+                                            title="Help"
+                                        >
+                                            <HelpCircle className="size-4" />
+                                        </Button>
 
+                                        <Button
+                                            variant="outline"
+                                            onClick={handleExport}
+                                            className="h-11 w-11 rounded-xl bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-700"
+                                            disabled={sortedStaff.length === 0}
+                                            title="Export"
+                                        >
+                                            <FileDown className="size-4" />
+                                        </Button>
+
+                                        <Button
+                                            variant="outline"
+                                            onClick={resetFilters}
+                                            className="h-11 w-11 rounded-xl bg-white border-zinc-200 hover:bg-zinc-50 text-zinc-700"
+                                            title="Reset"
+                                        >
+                                            <RotateCcw className="size-4" />
+                                        </Button>
+                                    </div>
+                                    
+                                    {/* Batch Actions */}
                                     {selectedIds.size > 0 && (
-                                        <div className="flex gap-1 animate-in slide-in-from-right-4">
+                                        <div className="flex items-center gap-2 w-full lg:w-auto">
                                             <Button
                                                 onClick={() => setConfirmType("BATCH_GRANT")}
-                                                className="h-10 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-sm shadow-emerald-100"
+                                                className="h-11 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm shadow-sm shadow-emerald-100 flex-1 lg:flex-none"
                                             >
-                                                <ShieldCheck className="size-3.5" />
-                                                <span>Grant ({selectedIds.size})</span>
+                                                <ShieldCheck className="size-4 mr-2" />
+                                                Grant ({selectedIds.size})
                                             </Button>
                                             <Button
                                                 onClick={() => setConfirmType("BATCH_REVOKE")}
-                                                className="h-10 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-[10px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-sm shadow-rose-100"
+                                                className="h-11 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-medium text-sm shadow-sm shadow-rose-100 flex-1 lg:flex-none"
                                             >
-                                                <ShieldOff className="size-3.5" />
-                                                <span>Revoke ({selectedIds.size})</span>
+                                                <ShieldOff className="size-4 mr-2" />
+                                                Revoke ({selectedIds.size})
                                             </Button>
-
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
-                                                    <Button
-                                                        className="h-10 px-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-black text-[10px] uppercase tracking-wider border-none w-[110px] shadow-sm shadow-violet-100 flex items-center gap-1.5"
+                                                    <Button className="h-11 px-4 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-medium text-sm shadow-sm shadow-violet-100 flex-1 lg:flex-none"
                                                     >
-                                                        <UserCog className="size-3.5" />
-                                                        <span>Role</span>
+                                                        <UserCog className="size-4 mr-2" />
+                                                        Change Role
                                                     </Button>
                                                 </DropdownMenuTrigger>
-                                                <DropdownMenuContent className="rounded-xl border-zinc-100 min-w-[140px]">
+                                                <DropdownMenuContent className="rounded-xl border-zinc-200 min-w-[160px]">
                                                     {batchRoleOptions.map(r => (
                                                         <DropdownMenuItem 
                                                             key={r} 
                                                             onClick={() => { setBatchRole(r); setConfirmType("BATCH_ROLE"); }}
-                                                            className="font-bold text-[10px] uppercase py-2 cursor-pointer"
+                                                            className="font-medium text-sm py-2 cursor-pointer"
                                                         >
                                                             {r}
                                                         </DropdownMenuItem>
@@ -785,7 +857,8 @@ export default function StaffDirectoryPage() {
                             </DialogContent>
                         </Dialog>
 
-                        <div className="bg-white rounded-[28px] shadow-sm border border-zinc-200/60 overflow-hidden">
+                        {viewMode === "LIST" ? (
+                            <div className="bg-white rounded-[28px] shadow-sm border border-zinc-200/60 overflow-hidden">
                             <div className="hidden md:grid grid-cols-[44px_1.8fr_1fr_1fr_1fr_1fr_44px] bg-zinc-50/80 px-6 py-4 border-b gap-4 items-center">
                                 <button
                                     onClick={toggleAll}
@@ -1089,6 +1162,80 @@ export default function StaffDirectoryPage() {
                                 </div>
                             )}
                         </div>
+                        ) : (
+                            /* Organization Tree View */
+                            <div className="bg-white rounded-[28px] shadow-sm border border-zinc-200/60 overflow-hidden">
+                                <div className="px-6 py-4 border-b bg-zinc-50 flex items-center gap-2">
+                                    <Building2 className="size-4 text-zinc-500" />
+                                    <span className="text-sm font-bold text-zinc-900">Organization Structure</span>
+                                </div>
+                                <div className="p-4 md:p-6 max-h-[600px] overflow-y-auto">
+                                    {isFetching ? (
+                                        <div className="space-y-4">
+                                            {Array.from({ length: 3 }).map((_, i) => (
+                                                <div key={i} className="space-y-3 animate-pulse">
+                                                    <Skeleton className="h-5 w-40 rounded" />
+                                                    <Skeleton className="h-4 w-32 rounded ml-4" />
+                                                    <Skeleton className="h-4 w-32 rounded ml-4" />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : Object.keys(staffByDepartment).length > 0 ? (
+                                        <div className="space-y-6">
+                                            {Object.entries(staffByDepartment).map(([dept, members]) => (
+                                                <div key={dept} className="space-y-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="size-8 rounded-xl bg-zinc-900 text-white flex items-center justify-center">
+                                                            <Building2 className="size-4" />
+                                                        </div>
+                                                        <div>
+                                                            <h3 className="text-sm font-black uppercase text-zinc-900">{dept}</h3>
+                                                            <p className="text-xs text-zinc-500">{members.length} team member{members.length !== 1 ? "s" : ""}</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="ml-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                                        {members.map((person: any) => {
+                                                            const fullName = `${person.Firstname || ""} ${person.Lastname || ""}`.trim()
+                                                            const role = (person.Role || "MEMBER").toUpperCase()
+                                                            const accessOn = person.isActive === true
+                                                            return (
+                                                                <div
+                                                                    key={person._id}
+                                                                    onClick={() => setSelectedStaff(person)}
+                                                                    className="flex items-center gap-3 p-3 rounded-xl border border-zinc-200 hover:border-zinc-300 hover:bg-zinc-50 cursor-pointer transition-all"
+                                                                >
+                                                                    <Avatar className="size-9 rounded-xl border border-zinc-100 flex-shrink-0">
+                                                                        <AvatarImage src={person.profilePicture} />
+                                                                        <AvatarFallback className="bg-zinc-900 text-white text-xs font-bold">{person.Firstname?.[0]}{person.Lastname?.[0]}</AvatarFallback>
+                                                                    </Avatar>
+                                                                    <div className="min-w-0 flex-1">
+                                                                        <p className="text-sm font-bold text-zinc-900 truncate">{fullName}</p>
+                                                                        <div className="flex items-center gap-2 mt-0.5">
+                                                                            <span className="text-xs text-zinc-500 truncate">{role}</span>
+                                                                            <span className="text-zinc-200">·</span>
+                                                                            <span className={cn("text-xs font-medium", accessOn ? "text-emerald-600" : "text-zinc-400")}>
+                                                                                {accessOn ? "Authorized" : "Revoked"}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="py-16 flex flex-col items-center gap-3">
+                                            <div className="size-16 rounded-3xl bg-zinc-50 border border-zinc-100 flex items-center justify-center">
+                                                <Users className="size-7 text-zinc-200" />
+                                            </div>
+                                            <p className="text-sm font-bold text-zinc-400 text-center">No staff to display</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </main>
 
                     {/* Security Sheet */}

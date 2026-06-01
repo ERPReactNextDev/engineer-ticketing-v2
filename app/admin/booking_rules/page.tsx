@@ -646,13 +646,17 @@ function RuleModalContent({ setIsOpen, initialData, onDelete }: any) {
     const [isSubmitting, setIsSubmitting] = React.useState(false)
     const [staff, setStaff] = React.useState<any[]>([])
 
-    // Fetch Staff List for the dropdown
+    // Fetch Staff List for the dropdown — one-time read, admin-only
     React.useEffect(() => {
-      const q = query(collection(db, "staff"), orderBy("Firstname", "asc"));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        setStaff(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-      });
-      return () => unsubscribe();
+      const fetchStaff = async () => {
+        try {
+          const { getDocs } = await import("firebase/firestore");
+          const q = query(collection(db, "staff"), orderBy("Firstname", "asc"));
+          const snapshot = await getDocs(q);
+          setStaff(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+        } catch (e) { console.error("Staff fetch error:", e); }
+      };
+      fetchStaff();
     }, []);
 
     React.useEffect(() => {

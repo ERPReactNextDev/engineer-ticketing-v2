@@ -322,13 +322,21 @@ export default function SchedulePage() {
     setFormData(prev => ({ ...prev, address: combined }));
   }, [formData.region, formData.province, formData.city, formData.barangay, formData.street, regions, provinces, cities, barangays]);
 
-  // FETCH HISTORICAL ADDRESSES
+  // FETCH HISTORICAL ADDRESSES — one-time read, limited to 100 docs
   React.useEffect(() => {
     const fetchAddresses = async () => {
       try {
-        const q = query(collection(db, "appointments"), where("department", "==", "ENGINEERING"));
+        // FIX: Use limit() to avoid reading the entire appointments collection
+        const { limit: fsLimit } = await import("firebase/firestore");
+        const q = query(
+          collection(db, "appointments"),
+          where("department", "==", "ENGINEERING"),
+          fsLimit(100)
+        );
         const snap = await getDocs(q);
-        const addresses = Array.from(new Set(snap.docs.map(doc => doc.data().address))).filter(Boolean) as string[];
+        const addresses = Array.from(
+          new Set(snap.docs.map(doc => doc.data().address))
+        ).filter(Boolean) as string[];
         setAddressOptions(addresses);
       } catch (err) { console.error(err); }
     };
@@ -368,7 +376,7 @@ export default function SchedulePage() {
     return () => unsubscribe();
   }, [selectedAssistance, isHydrated]);
 
-  // 3. CALENDAR DATA PERSISTENCE - ENHANCED FOR ALL PICS
+  // 3. CALENDAR DATA — only subscribe when we have PICs and a valid month
   React.useEffect(() => {
     if (!isHydrated || assignedPics.length === 0) {
       setAllAppointments([]);
@@ -378,8 +386,8 @@ export default function SchedulePage() {
     const startOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1, 0, 0, 0);
     const endOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0, 23, 59, 59);
     
-    // Fetch appointments for all assigned PICs in the current month
-    const picNames = assignedPics.map(p => typeof p === 'string' ? p : p.name);
+    // FIX: Limit to max 10 PICs for the "in" query (Firestore limit is 30, but keep it tight)
+    const picNames = assignedPics.slice(0, 10).map((p: any) => typeof p === 'string' ? p : p.name);
     const q = query(
       collection(db, "appointments"), 
       where("pic", "in", picNames), 
@@ -410,16 +418,16 @@ export default function SchedulePage() {
     return () => unsubscribe();
   }, [assignedPics, viewDate, isHydrated]);
 
-  // 4. BLOCKED SLOTS SYNC - ENHANCED FOR ALL PICS & GLOBAL BLOCKS
+  // 4. BLOCKED SLOTS — only subscribe when we have PICs
   React.useEffect(() => {
     if (!isHydrated || assignedPics.length === 0) {
       setAllBlockedSlots([]);
       return;
     }
 
-    const picNames = assignedPics.map(p => typeof p === 'string' ? p : p.name);
-    // Include "ALL_STAFF" or empty string for global service blocking
-    const targetPics = [...picNames, "ALL_STAFF", "GLOBAL", "ALL", ""];
+    // FIX: Limit the "in" array to avoid over-fetching; cap at 10 PICs
+    const picNames = assignedPics.slice(0, 10).map((p: any) => typeof p === 'string' ? p : p.name);
+    const targetPics = [...picNames, "ALL_STAFF", "GLOBAL"].slice(0, 10);
 
     const q = query(
       collection(db, "blocked_slots"),

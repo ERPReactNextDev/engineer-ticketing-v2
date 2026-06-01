@@ -43,7 +43,7 @@ import { format } from "date-fns"
 
 // DATABASE TOOLS
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot, query, orderBy, doc, writeBatch, updateDoc, Timestamp, getDoc } from "firebase/firestore"
+import { collection, onSnapshot, query, orderBy, where, doc, writeBatch, updateDoc, Timestamp, getDoc } from "firebase/firestore"
 
 // SHARED COMPONENTS
 import { PageHeader } from "@/components/page-header"
@@ -405,12 +405,27 @@ export default function DialuxManagementPage() {
         }
     }
 
-    // 2. LIVE DATA SYNC WITH ROLE-BASED FILTERING
+    // 2. LIVE DATA SYNC — server-side filtered to avoid full collection downloads
     React.useEffect(() => {
         if (isUserLoading || !user.id) return;
 
         setIsDataLoading(true)
-        const q = query(collection(db, "dialux_requests"), orderBy("createdAt", "desc"))
+        const userDept = user.dept.toUpperCase();
+        const userRole = user.role.toUpperCase();
+        const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole);
+        const isTSM = userRole === "TSM";
+        const isManager = userRole === "MANAGER";
+        const isProcurement = userDept === "PROCUREMENT";
+
+        // FIX: Apply server-side where filter for non-admin users
+        let q;
+        if (hasGlobalAccess || isProcurement) {
+            q = query(collection(db, "dialux_requests"), orderBy("createdAt", "desc"))
+        } else if ((isTSM || isManager) && subordinateIds.length > 0) {
+            q = query(collection(db, "dialux_requests"), where("submittedBy", "in", [user.id, ...subordinateIds.slice(0, 9)]), orderBy("createdAt", "desc"))
+        } else {
+            q = query(collection(db, "dialux_requests"), where("submittedBy", "==", user.id), orderBy("createdAt", "desc"))
+        }
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             let liveData = snapshot.docs.map(doc => {
@@ -424,36 +439,9 @@ export default function DialuxManagementPage() {
                 }
             }) as DialuxRequest[]
 
-            /**
-             * VISIBILITY PROTOCOL:
-             * - IT, ENGINEERING, SUPER ADMIN, MANAGER, LEADER: Global visibility
-             * - TSM (SALES): Can see their own AND all TSA requests
-             * - TSA (SALES): Restricted to personal records (submittedBy matches userId)
-             * - OTHERS (MEMBER): Restricted to personal records (submittedBy matches userId)
-             */
-            const userDept = user.dept.toUpperCase();
-            const userRole = user.role.toUpperCase();
-            const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole);
-            const isTSM = userRole === "TSM";
-            const isManager = userRole === "MANAGER";
-
-            // Procurement filter for paid simulations
-            if (userDept === "PROCUREMENT") {
+            // Procurement filter for paid simulations only
+            if (isProcurement) {
                 liveData = liveData.filter(r => r.assessment?.simulationType?.toLowerCase() === "paid");
-            }
-
-            // Client-side filtering for non-admin users
-            if (!hasGlobalAccess) {
-                if (isTSM || isManager) {
-                    // TSM and MANAGER can see their own AND all their subordinate requests
-                    liveData = liveData.filter(r =>
-                        r.submittedBy === user.id ||
-                        subordinateIds.includes(r.submittedBy || "")
-                    );
-                } else {
-                    // TSA and other Members ONLY see their own requests
-                    liveData = liveData.filter(r => r.submittedBy === user.id);
-                }
             }
 
             setRequests(liveData)
