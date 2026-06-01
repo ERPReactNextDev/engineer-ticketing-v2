@@ -938,6 +938,7 @@ export default function AppointmentDetailsPage() {
 
                 <CollaborationHub
                     requestId={id}
+                    spfNumber={data?.siteVisitNo || id}
                     collectionName="appointments"
                     messages={data?.messages || []}
                     currentUserId={userContext.id}
