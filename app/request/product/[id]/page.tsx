@@ -144,6 +144,57 @@ function extractDimensions(packaging: string) {
   return { l: match[1], w: match[2], h: match[3] };
 }
 
+function getBaseItemCode(itemCode: string) {
+  const c = (itemCode || "").trim().toUpperCase();
+  if (!c || c === "-") return "";
+  const m = c.match(/^(.*)-([A-Z])$/);
+  return m ? m[1] : c;
+}
+
+function getOptionSuffix(itemCode: string) {
+  const c = (itemCode || "").trim().toUpperCase();
+  const m = c.match(/-([A-Z])$/);
+  return m ? m[1] : "";
+}
+
+function groupProductsIntoRowsByItemCode(products: ProductCell[][]): ProductCell[][] {
+  const flat: Array<{ cell: ProductCell; origIndex: number; groupKey: string; optionSuffix: string }> = [];
+  let idx = 0;
+  for (const row of products) {
+    for (const cell of row) {
+      const base = getBaseItemCode(cell.itemCode);
+      const groupKey = base || `__ROW_${cell.rowIndex}`;
+      flat.push({ cell, origIndex: idx++, groupKey, optionSuffix: getOptionSuffix(cell.itemCode) });
+    }
+  }
+
+  const order: string[] = [];
+  const map = new Map<string, Array<{ cell: ProductCell; origIndex: number; optionSuffix: string }>>();
+
+  for (const it of flat) {
+    if (!map.has(it.groupKey)) {
+      map.set(it.groupKey, []);
+      order.push(it.groupKey);
+    }
+    map.get(it.groupKey)!.push({ cell: it.cell, origIndex: it.origIndex, optionSuffix: it.optionSuffix });
+  }
+
+  return order.map((key, rowIndex) => {
+    const items = map.get(key)!;
+    items.sort((a, b) => {
+      const ar = a.optionSuffix ? a.optionSuffix.charCodeAt(0) : 999;
+      const br = b.optionSuffix ? b.optionSuffix.charCodeAt(0) : 999;
+      if (ar !== br) return ar - br;
+      return a.origIndex - b.origIndex;
+    });
+    return items.map((it, productIndex) => ({
+      ...it.cell,
+      rowIndex,
+      productIndex,
+    }));
+  });
+}
+
 function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
   if (!offers?.product_offer_image) return [];
   const rate = parseFloat(exchangeRate) || 60;
@@ -171,7 +222,7 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
   const rowFinalUnitCosts = split(offers.final_unit_cost ?? "");
   const rowFinalSubtotals = split(offers.final_subtotal ?? "");
 
-  return rowImages.map((rowStr, rIdx) =>
+  const parsed = rowImages.map((rowStr, rIdx) =>
     rowStr.split(",").map((img, pIdx) => {
       const packagingStr = rowPackaging[rIdx]?.split(",")[pIdx]?.trim() ?? "";
       const dims = extractDimensions(packagingStr);
@@ -224,6 +275,8 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
       };
     })
   );
+
+  return groupProductsIntoRowsByItemCode(parsed);
 }
 
 function rebuildStr(rows: ProductCell[][], get: (p: ProductCell) => string) {
