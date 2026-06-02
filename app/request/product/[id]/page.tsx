@@ -143,7 +143,7 @@ function extractDimensions(packaging: string) {
   if (!match) return { l: "", w: "", h: "" };
   return { l: match[1], w: match[2], h: match[3] };
 }
-
+//test
 function getBaseItemCode(itemCode: string) {
   const c = (itemCode || "").trim().toUpperCase();
   if (!c || c === "-") return "";
