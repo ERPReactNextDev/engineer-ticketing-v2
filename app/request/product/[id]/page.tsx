@@ -142,7 +142,7 @@ function extractDimensions(packaging: string) {
   const match = packaging.match(/(\d+)\s*cm\s*x\s*(\d+)\s*cm\s*x\s*(\d+)\s*cm/i);
   if (!match) return { l: "", w: "", h: "" };
   return { l: match[1], w: match[2], h: match[3] };
-}//test
+}//tests
 
 function getBaseItemCode(itemCode: string) {
   const c = (itemCode || "").trim().toUpperCase();
