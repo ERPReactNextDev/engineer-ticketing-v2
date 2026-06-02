@@ -112,9 +112,9 @@ export default function OtherRequestManagementPage() {
         return matchesSearch && matchesStatus
     })
 
-    const limit = parseInt(itemsPerPage)
-    const totalPages = Math.ceil(filteredRequests.length / limit)
-    const paginatedItems = filteredRequests.slice((currentPage - 1) * limit, currentPage * limit)
+    const itemsLimit = parseInt(itemsPerPage)
+    const totalPages = Math.ceil(filteredRequests.length / itemsLimit)
+    const paginatedItems = filteredRequests.slice((currentPage - 1) * itemsLimit, currentPage * itemsLimit)
 
     return (
         <ProtectedPageWrapper>
