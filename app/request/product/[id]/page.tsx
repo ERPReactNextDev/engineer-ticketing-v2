@@ -65,6 +65,9 @@ interface ProductCell {
   illuDrawing: string;
   finalUnitCost: string;
   finalSubtotal: string;
+  commercialType: string;
+  spfRemarksPd: string;
+  spfRemarksProcurement: string;
 }
 
 
@@ -221,6 +224,9 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
   const rowIlluDrawings = split(offers.illuminance_drawing ?? "");
   const rowFinalUnitCosts = split(offers.final_unit_cost ?? "");
   const rowFinalSubtotals = split(offers.final_subtotal ?? "");
+  const rowCommercialTypes = split(offers.commercial_type ?? "");
+  const rowSpfRemarksPd = split(offers.spf_remarks_pd ?? "");
+  const rowSpfRemarksProcurement = split(offers.spf_remarks_procurement ?? "");
 
   const parsed = rowImages.map((rowStr, rIdx) =>
     rowStr.split(",").map((img, pIdx) => {
@@ -270,6 +276,9 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
         finalSubtotal: (rowFinalSubtotals[rIdx]?.split(",")[pIdx]?.trim() === "-" || !rowFinalSubtotals[rIdx]?.split(",")[pIdx] || parseFloat(rowFinalSubtotals[rIdx]?.split(",")[pIdx]) === qty * unitCost)
           ? calculatedSubtotal
           : rowFinalSubtotals[rIdx]?.split(",")[pIdx]?.trim(),
+        commercialType: rowCommercialTypes[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
+        spfRemarksPd: rowSpfRemarksPd[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
+        spfRemarksProcurement: rowSpfRemarksProcurement[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
         rowIndex: rIdx,
         productIndex: pIdx,
       };
@@ -597,12 +606,12 @@ export default function ProcurementDetailPage() {
   const isLocked = isApproved || isRejected;
 
   /* ── EDIT ── */
-  const updateCell = (rIdx: number, pIdx: number, field: "sellingCost" | "leadTime" | "finalUnitCost", value: string) => {
+  const updateCell = (rIdx: number, pIdx: number, field: "sellingCost" | "leadTime" | "finalUnitCost" | "spfRemarksProcurement", value: string) => {
     if (isLocked) return;
     setRows(prev => {
       const next = prev.map(r => r.map(p => ({ ...p })));
       next[rIdx][pIdx][field] = value;
-      
+
       // Auto-calculate finalSubtotal if finalUnitCost changes
       if (field === "finalUnitCost") {
         const qty = parseFloat(next[rIdx][pIdx].qty) || 0;
@@ -612,7 +621,7 @@ export default function ProcurementDetailPage() {
         const effectiveUnitCost = (value === "-" || value === "") ? pdUnitCost : parseFloat(value) || 0;
         next[rIdx][pIdx].finalSubtotal = (qty * effectiveUnitCost * rate).toString();
       }
-      
+
       return next;
     });
   };
@@ -823,6 +832,9 @@ export default function ProcurementDetailPage() {
         proj_lead_time: rebuildStr(rows, p => p.leadTime),
         final_unit_cost: rebuildStr(rows, p => p.finalUnitCost),
         final_subtotal: rebuildStr(rows, p => p.finalSubtotal),
+        commercial_type: rebuildStr(rows, p => p.commercialType),
+        spf_remarks_pd: rebuildStr(rows, p => p.spfRemarksPd),
+        spf_remarks_procurement: rebuildStr(rows, p => p.spfRemarksProcurement),
         date_updated: new Date().toISOString(),
       };
       if (markCostingDone) {
@@ -1828,6 +1840,61 @@ export default function ProcurementDetailPage() {
                                               value={p.leadTime === "-" ? "" : p.leadTime}
                                               onChange={e => updateCell(rIdx, pIdx, "leadTime", e.target.value || "-")}
                                               className="h-12 rounded-2xl border-zinc-200 bg-violet-50/40 focus-visible:ring-violet-500 font-bold text-sm"
+                                            />
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {/* ── REMARKS FIELDS ── */}
+                                      <div className="mt-4 pt-4 border-t border-zinc-100 space-y-4">
+                                        {/* Commercial Type - Read Only */}
+                                        <div className="space-y-1.5">
+                                          <label className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-zinc-400">
+                                            <Building2 size={9} />
+                                            Commercial Type
+                                          </label>
+                                          <div className="h-10 px-3 rounded-xl border border-zinc-200 bg-zinc-50 flex items-center">
+                                            <p className="text-[11px] font-bold text-zinc-700">
+                                              {p.commercialType || "-"}
+                                            </p>
+                                          </div>
+                                        </div>
+
+                                        {/* SPF Remarks PD - Read Only */}
+                                        <div className="space-y-1.5">
+                                          <label className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-zinc-400">
+                                            <MessageSquare size={9} />
+                                            SPF Remarks (PD)
+                                          </label>
+                                          <div className="min-h-15 px-3 py-2 rounded-xl border border-zinc-200 bg-zinc-50">
+                                            <p className="text-[11px] font-medium text-zinc-700 leading-relaxed whitespace-pre-wrap">
+                                              {p.spfRemarksPd || "-"}
+                                            </p>
+                                          </div>
+                                        </div>
+
+                                        {/* SPF Remarks Procurement - Editable */}
+                                        <div className="space-y-1.5">
+                                          <label className={cn(
+                                            "flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest",
+                                            isLocked ? "text-zinc-400" : "text-blue-600"
+                                          )}>
+                                            <MessageSquare size={9} />
+                                            SPF Remarks (Procurement)
+                                            {isLocked && <Lock size={8} className="text-zinc-300" />}
+                                          </label>
+                                          {isLocked ? (
+                                            <div className="min-h-15 px-3 py-2 rounded-xl border border-zinc-200 bg-zinc-50">
+                                              <p className="text-[11px] font-medium text-zinc-700 leading-relaxed whitespace-pre-wrap">
+                                                {p.spfRemarksProcurement || "-"}
+                                              </p>
+                                            </div>
+                                          ) : (
+                                            <textarea
+                                              value={p.spfRemarksProcurement}
+                                              onChange={e => updateCell(rIdx, pIdx, "spfRemarksProcurement", e.target.value)}
+                                              placeholder="Enter procurement remarks..."
+                                              className="w-full min-h-20 px-3 py-2 rounded-xl border border-zinc-200 bg-white text-[11px] font-medium text-zinc-700 leading-relaxed resize-none focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:border-blue-500 outline-none transition-all"
                                             />
                                           )}
                                         </div>
