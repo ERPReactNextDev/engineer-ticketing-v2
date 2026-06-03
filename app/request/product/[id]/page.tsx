@@ -225,8 +225,8 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
   const rowFinalUnitCosts = split(offers.final_unit_cost ?? "");
   const rowFinalSubtotals = split(offers.final_subtotal ?? "");
   const rowCommercialTypes = split(offers.commercial_type ?? "");
-  const rowSpfRemarksPd = split(offers.spf_remarks_pd ?? "");
-  const rowSpfRemarksProcurement = split(offers.spf_remarks_procurement ?? "");
+  const rowSpfRemarksPd = offers.spf_remarks_pd ? offers.spf_remarks_pd.split("|ROW|") : [];
+  const rowSpfRemarksProcurement = offers.spf_remarks_procurement ? offers.spf_remarks_procurement.split("|ROW|") : [];
 
   const parsed = rowImages.map((rowStr, rIdx) =>
     rowStr.split(",").map((img, pIdx) => {
@@ -245,6 +245,13 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
       const calculatedPdSubtotal = (qty * pdUnitCost * rate).toString();
       
       const dbPdSubtotal = rowSubtotals[rIdx]?.split(",")[pIdx]?.trim() ?? "0";
+
+      // Calculate flat index for remarks (remarks use |ROW| separator for all products)
+      let flatIndex = 0;
+      for (let r = 0; r < rIdx; r++) {
+        flatIndex += rowImages[r]?.split(",").length || 0;
+      }
+      flatIndex += pIdx;
 
       return {
         image: img.trim(),
@@ -277,8 +284,8 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
           ? calculatedSubtotal
           : rowFinalSubtotals[rIdx]?.split(",")[pIdx]?.trim(),
         commercialType: rowCommercialTypes[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        spfRemarksPd: rowSpfRemarksPd[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        spfRemarksProcurement: rowSpfRemarksProcurement[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
+        spfRemarksPd: rowSpfRemarksPd[flatIndex]?.trim() ?? "-",
+        spfRemarksProcurement: rowSpfRemarksProcurement[flatIndex]?.trim() ?? "-",
         rowIndex: rIdx,
         productIndex: pIdx,
       };
@@ -290,6 +297,11 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
 
 function rebuildStr(rows: ProductCell[][], get: (p: ProductCell) => string) {
   return rows.map(r => r.map(get).join(",")).join("|ROW|");
+}
+
+function rebuildRemarksStr(rows: ProductCell[][], get: (p: ProductCell) => string) {
+  // For remarks fields, always use |ROW| separator regardless of row/product structure
+  return rows.flatMap(r => r.map(get)).join("|ROW|");
 }
 
 /* ─────────────────────────────────────────────
@@ -833,8 +845,8 @@ export default function ProcurementDetailPage() {
         final_unit_cost: rebuildStr(rows, p => p.finalUnitCost),
         final_subtotal: rebuildStr(rows, p => p.finalSubtotal),
         commercial_type: rebuildStr(rows, p => p.commercialType),
-        spf_remarks_pd: rebuildStr(rows, p => p.spfRemarksPd),
-        spf_remarks_procurement: rebuildStr(rows, p => p.spfRemarksProcurement),
+        spf_remarks_pd: rebuildRemarksStr(rows, p => p.spfRemarksPd),
+        spf_remarks_procurement: rebuildRemarksStr(rows, p => p.spfRemarksProcurement),
         date_updated: new Date().toISOString(),
       };
       if (markCostingDone) {
