@@ -39,6 +39,7 @@ import ProtectedPageWrapper from "@/components/protected-page-wrapper";
 ───────────────────────────────────────────── */
 interface ProductCell {
   image: string;
+  productName: string;
   qty: string;
   specs: { title: string; details: string[] }[];
   unitCost: string;
@@ -225,6 +226,7 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
   const rowFinalUnitCosts = split(offers.final_unit_cost ?? "");
   const rowFinalSubtotals = split(offers.final_subtotal ?? "");
   const rowCommercialTypes = split(offers.commercial_type ?? "");
+  const rowProductNames = split(offers.product_name ?? "");
   const rowSpfRemarksPd = offers.spf_remarks_pd ? offers.spf_remarks_pd.split("|ROW|") : [];
   const rowSpfRemarksProcurement = offers.spf_remarks_procurement ? offers.spf_remarks_procurement.split("|ROW|") : [];
 
@@ -255,6 +257,7 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
 
       return {
         image: img.trim(),
+        productName: rowProductNames[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
         qty: qtyStr,
         specs: parseSpecs(rowSpecs[rIdx]?.split(" || ")[pIdx] ?? ""),
         unitCost: unitCostStr,
@@ -1619,11 +1622,18 @@ export default function ProcurementDetailPage() {
                                     {/* Image + specs */}
                                     <div className="p-3 md:p-4 border-b border-zinc-50 bg-zinc-50/20">
                                       <div className="flex gap-3 md:gap-4">
-                                        <div className="size-20 md:size-28 bg-white rounded-2xl border border-zinc-100 overflow-hidden flex-shrink-0 shadow-sm">
-                                          {p.image && p.image !== "-"
-                                            ? <img src={p.image} alt="Product" className="w-full h-full object-contain" />
-                                            : <div className="w-full h-full flex items-center justify-center"><ImageIcon size={20} className="text-zinc-200" /></div>
-                                          }
+                                        <div className="flex-shrink-0">
+                                          <div className="size-20 md:size-28 bg-white rounded-2xl border border-zinc-100 overflow-hidden shadow-sm">
+                                            {p.image && p.image !== "-"
+                                              ? <img src={p.image} alt="Product" className="w-full h-full object-contain" />
+                                              : <div className="w-full h-full flex items-center justify-center"><ImageIcon size={20} className="text-zinc-200" /></div>
+                                            }
+                                          </div>
+                                          {p.productName && p.productName !== "-" && (
+                                            <p className="text-[9px] font-bold text-zinc-600 text-center mt-2 leading-tight px-1">
+                                              {p.productName}
+                                            </p>
+                                          )}
                                         </div>
                                         <div className="flex-1 min-w-0">
                                           <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest mb-2">Technical Specs</p>
