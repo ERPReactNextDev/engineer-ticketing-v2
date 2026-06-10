@@ -180,7 +180,7 @@ function parseAllProducts(offers: any): ProductCell[][] {
 }
 
 function rebuildStr(rows: ProductCell[][], get: (p: ProductCell) => string) {
-  return rows.map(r => r.map(get).join(",")).join("|ROW|");
+  return rows.map(r => r.map(get).join("|ROW|")).join("|ROW|");
 }
 
 /* ─────────────────────────────────────────────

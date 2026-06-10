@@ -231,12 +231,12 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
   const rowSpfRemarksProcurement = offers.spf_remarks_procurement ? offers.spf_remarks_procurement.split("|ROW|") : [];
 
   const parsed = rowImages.map((rowStr, rIdx) =>
-    rowStr.split(",").map((img, pIdx) => {
-      const packagingStr = rowPackaging[rIdx]?.split(",")[pIdx]?.trim() ?? "";
+    rowStr.split("|ROW|").map((img, pIdx) => {
+      const packagingStr = rowPackaging[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "";
       const dims = extractDimensions(packagingStr);
-      const qtyStr = rowQtys[rIdx]?.split(",")[pIdx]?.trim() ?? "0";
-      const unitCostStr = rowUnitCosts[rIdx]?.split(",")[pIdx]?.trim() ?? "0";
-      const finalUnitCostStr = rowFinalUnitCosts[rIdx]?.split(",")[pIdx]?.trim() ?? unitCostStr;
+      const qtyStr = rowQtys[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "0";
+      const unitCostStr = rowUnitCosts[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "0";
+      const finalUnitCostStr = rowFinalUnitCosts[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? unitCostStr;
       
       const qty = parseFloat(qtyStr) || 0;
       const unitCost = (finalUnitCostStr === "-" || finalUnitCostStr === "") ? (parseFloat(unitCostStr) || 0) : (parseFloat(finalUnitCostStr) || 0);
@@ -246,47 +246,47 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
       const calculatedSubtotal = (qty * unitCost * rate).toString();
       const calculatedPdSubtotal = (qty * pdUnitCost * rate).toString();
       
-      const dbPdSubtotal = rowSubtotals[rIdx]?.split(",")[pIdx]?.trim() ?? "0";
+      const dbPdSubtotal = rowSubtotals[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "0";
 
       // Calculate flat index for remarks (remarks use |ROW| separator for all products)
       let flatIndex = 0;
       for (let r = 0; r < rIdx; r++) {
-        flatIndex += rowImages[r]?.split(",").length || 0;
+        flatIndex += rowImages[r]?.split("|ROW|").length || 0;
       }
       flatIndex += pIdx;
 
       return {
         image: img.trim(),
-        productName: rowProductNames[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
+        productName: rowProductNames[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
         qty: qtyStr,
         specs: parseSpecs(rowSpecs[rIdx]?.split(" || ")[pIdx] ?? ""),
         unitCost: unitCostStr,
         packaging: packagingStr,
-        factory: rowFactories[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        port: rowPorts[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
+        factory: rowFactories[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        port: rowPorts[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
         subtotal: (dbPdSubtotal === "-" || parseFloat(dbPdSubtotal) === qty * pdUnitCost) 
           ? calculatedPdSubtotal 
           : dbPdSubtotal,
-        supplierBrand: rowBrands[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        companyName: rowCompanies[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        contactName: rowContactNames[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        contactNumber: rowContactNums[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        sellingCost: rowSelling[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        leadTime: rowLeadTimes[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
+        supplierBrand: rowBrands[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        companyName: rowCompanies[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        contactName: rowContactNames[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        contactNumber: rowContactNums[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        sellingCost: rowSelling[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        leadTime: rowLeadTimes[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
         l_db: dims.l,
         w_db: dims.w,
         h_db: dims.h,
-        pcs_carton_db: rowPcsCartons[rIdx]?.split(",")[pIdx]?.trim() ?? "",
-        itemCode: rowItemCodes[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        priceValidity: rowPriceValidity[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        tds: rowTDS[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        dimDrawing: rowDimDrawings[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
-        illuDrawing: rowIlluDrawings[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
+        pcs_carton_db: rowPcsCartons[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "",
+        itemCode: rowItemCodes[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        priceValidity: rowPriceValidity[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        tds: rowTDS[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        dimDrawing: rowDimDrawings[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
+        illuDrawing: rowIlluDrawings[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
         finalUnitCost: (finalUnitCostStr === "-" || finalUnitCostStr === "") ? unitCostStr : finalUnitCostStr,
-        finalSubtotal: (rowFinalSubtotals[rIdx]?.split(",")[pIdx]?.trim() === "-" || !rowFinalSubtotals[rIdx]?.split(",")[pIdx] || parseFloat(rowFinalSubtotals[rIdx]?.split(",")[pIdx]) === qty * unitCost)
+        finalSubtotal: (rowFinalSubtotals[rIdx]?.split("|ROW|")[pIdx]?.trim() === "-" || !rowFinalSubtotals[rIdx]?.split("|ROW|")[pIdx] || parseFloat(rowFinalSubtotals[rIdx]?.split("|ROW|")[pIdx]) === qty * unitCost)
           ? calculatedSubtotal
-          : rowFinalSubtotals[rIdx]?.split(",")[pIdx]?.trim(),
-        commercialType: rowCommercialTypes[rIdx]?.split(",")[pIdx]?.trim() ?? "-",
+          : rowFinalSubtotals[rIdx]?.split("|ROW|")[pIdx]?.trim(),
+        commercialType: rowCommercialTypes[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
         spfRemarksPd: rowSpfRemarksPd[flatIndex]?.trim() ?? "-",
         spfRemarksProcurement: rowSpfRemarksProcurement[flatIndex]?.trim() ?? "-",
         rowIndex: rIdx,
@@ -299,7 +299,7 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
 }
 
 function rebuildStr(rows: ProductCell[][], get: (p: ProductCell) => string) {
-  return rows.map(r => r.map(get).join(",")).join("|ROW|");
+  return rows.map(r => r.map(get).join("|ROW|")).join("|ROW|");
 }
 
 function rebuildRemarksStr(rows: ProductCell[][], get: (p: ProductCell) => string) {
