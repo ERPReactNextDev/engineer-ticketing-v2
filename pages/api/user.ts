@@ -21,10 +21,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // CASE 2: All Users (Dropdown)
     const supabase = getSupabaseClient();
-    const query = supabase.from("users").select("*").select("Password", { count: "exact" });
+    let query = supabase.from("users").select("*");
     
     if (role) {
-      query.eq("Role", role);
+      query = query.eq("Role", role);
     }
 
     const { data: users, error } = await query;
