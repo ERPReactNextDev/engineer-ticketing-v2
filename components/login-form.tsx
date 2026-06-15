@@ -197,14 +197,10 @@ export default function LoginForm({ className, ...props }: React.ComponentProps<
         setProgress(value)
         if (value >= 100) {
           clearInterval(interval)
-          if (userDept === "IT" || firestoreRole !== "GUEST") {
-            toast.success(`${getGreeting()}, ${displayName}!`)
-            router.push(`/dashboard?id=${result.userId}`)
-          } else {
-            toast.error("Access Denied: Account restricted.")
-            setIsAuthorizing(false)
-            setProgress(0)
-          }
+          // Allow access for all authenticated users (non-GUEST role)
+          // The API already validated department access
+          toast.success(`${getGreeting()}, ${displayName}!`)
+          router.push(`/dashboard?id=${result.userId}`)
         }
       }, 60)
     } catch (err) {

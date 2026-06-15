@@ -1,6 +1,5 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { connectToDatabase } from "@/lib/MongoDB";
-import { ObjectId } from "mongodb";
+import { getSupabaseClient } from "@/lib/ModuleGlobal/supabase";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -14,32 +13,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const db = await connectToDatabase();
-    const usersCollection = db.collection("users");
+    const supabase = getSupabaseClient();
 
-    // Convert string IDs to ObjectId
-    const objectIds = userIds
-      .filter(id => ObjectId.isValid(id))
-      .map(id => new ObjectId(id));
+    // Fetch users from Supabase
+    const { data: users, error } = await supabase
+      .from("users")
+      .select("id, Firstname, Lastname, userName, profilePicture, Department")
+      .in("id", userIds);
 
-    // Fetch users with only necessary fields
-    const users = await usersCollection
-      .find({ _id: { $in: objectIds } })
-      .project({ 
-        _id: 1, 
-        Firstname: 1, 
-        Lastname: 1,
-        userName: 1,
-        profilePicture: 1,
-        Department: 1
-      })
-      .toArray();
+    if (error) {
+      console.error("Supabase error:", error);
+      return res.status(500).json({ message: "Database error" });
+    }
 
     // Create a map of userId -> user data
     const userMap: Record<string, { firstName: string; lastName: string; userName: string; profilePicture?: string; department?: string }> = {};
     
-    users.forEach(user => {
-      userMap[user._id.toString()] = {
+    users?.forEach(user => {
+      userMap[user.id.toString()] = {
         firstName: user.Firstname || "",
         lastName: user.Lastname || "",
         userName: user.userName || "",

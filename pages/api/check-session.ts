@@ -1,7 +1,6 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { connectToDatabase } from "@/lib/MongoDB";
+import { fetchUserById } from "@/lib/ModuleGlobal/supabase";
 import { parse } from "cookie";
-import { ObjectId } from "mongodb";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const cookies = req.headers.cookie ? parse(req.headers.cookie) : {};
@@ -14,11 +13,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(401).json({ error: "Unauthorized: No Session Found" });
   }
 
-  const db = await connectToDatabase();
-  const users = db.collection("users");
-
   try {
-    const user = await users.findOne({ _id: new ObjectId(sessionUserId as string) });
+    const user = await fetchUserById(sessionUserId as string);
     
     if (!user) return res.status(401).json({ error: "User not found" });
 
@@ -31,6 +27,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ message: "Session valid", user });
   } catch (err) {
-    return res.status(500).json({ error: "Invalid Session ID format" });
+    console.error("Session validation error:", err);
+    return res.status(500).json({ error: "Session validation failed" });
   }
 }

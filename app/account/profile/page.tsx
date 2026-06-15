@@ -59,7 +59,7 @@ export default function ProfilePage() {
   const sigCanvas = React.useRef<SignatureCanvas>(null)
 
   const [userDetails, setUserDetails] = React.useState<any>({
-    _id: "",
+    id: "",
     Firstname: "",
     Lastname: "",
     Email: "",
@@ -131,14 +131,14 @@ export default function ProfilePage() {
       return
     }
 
-    if (!userDetails._id) {
+    if (!userDetails.id) {
       toast.error("User ID is required")
       return
     }
 
     setSaving(true)
     try {
-      const payload = { ...userDetails, id: userDetails._id }
+      const payload = { ...userDetails, id: userDetails.id }
       delete payload.ConfirmPassword
       if (!payload.Password) delete payload.Password
 

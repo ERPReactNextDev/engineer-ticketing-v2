@@ -1,6 +1,5 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { connectToDatabase } from "@/lib/MongoDB";
-import { ObjectId } from "mongodb";
+import { updateUser, fetchUserById } from "@/lib/ModuleGlobal/supabase";
 import bcrypt from "bcrypt";
 import { v2 as cloudinary } from "cloudinary";
 
@@ -58,12 +57,8 @@ export default async function updateProfile(req: NextApiRequest, res: NextApiRes
   }
 
   try {
-    const db = await connectToDatabase();
-    const userCollection = db.collection("users");
-    const userObjectId = new ObjectId(id);
-
     // 1. Fetch current user data for asset comparison
-    const currentUser = await userCollection.findOne({ _id: userObjectId });
+    const currentUser = await fetchUserById(id);
     if (!currentUser) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -81,7 +76,7 @@ export default async function updateProfile(req: NextApiRequest, res: NextApiRes
       Address,
       Birthday,
       Gender,
-      updatedAt: new Date(),
+      updatedAt: new Date().toISOString(),
     };
 
     // 2. Handle Profile Picture Deletion/Update
@@ -112,15 +107,13 @@ export default async function updateProfile(req: NextApiRequest, res: NextApiRes
       updatedUser.Password = hashedPassword;
     }
 
-    const result = await userCollection.updateOne(
-      { _id: userObjectId },
-      { $set: updatedUser }
-    );
+    // Update user in Supabase
+    const success = await updateUser(id, updatedUser);
 
-    if (result.matchedCount === 1) {
+    if (success) {
       return res.status(200).json({ message: "Profile updated successfully" });
     } else {
-      return res.status(404).json({ error: "No changes applied" });
+      return res.status(500).json({ error: "Failed to update profile" });
     }
   } catch (error) {
     console.error("Error updating profile:", error);

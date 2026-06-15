@@ -1,7 +1,12 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { validateUser, connectToDatabase } from "@/lib/ModuleGlobal/mongodb";
+import {
+  validateUser,
+  fetchUserById,
+  fetchUserByEmail,
+  fetchUserByDeviceId,
+  updateUser,
+} from "@/lib/ModuleGlobal/supabase";
 import { serialize } from "cookie";
-import { ObjectId } from "mongodb";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -9,8 +14,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   const { Email, Password, deviceId, pin, mode, savedPin, userId } = req.body;
-  const db = await connectToDatabase();
-  const usersCollection = db.collection("users");
 
   let user;
   let isVerified = false;
@@ -32,11 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "userId and deviceId are required for biometric login." });
       }
 
-      try {
-        user = await usersCollection.findOne({ _id: new ObjectId(userId) });
-      } catch {
-        return res.status(400).json({ message: "Invalid userId format." });
-      }
+      user = await fetchUserById(userId);
 
       if (!user) {
         return res.status(401).json({ message: "Biometric account not found." });
@@ -46,10 +45,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       isVerified = true;
 
       // Update DeviceId so PIN login still works on this device
-      await usersCollection.updateOne(
-        { _id: user._id },
-        { $set: { DeviceId: deviceId, LastLoginAt: new Date(), LoginAttempts: 0 } }
-      );
+      await updateUser(userId, {
+        DeviceId: deviceId,
+        LastLoginAt: new Date().toISOString(),
+        LoginAttempts: 0,
+      });
     }
 
     /* ──────────────────────────────────────────
@@ -61,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "PIN and Device ID are required." });
       }
       if (pin === savedPin) isVerified = true;
-      user = await usersCollection.findOne({ DeviceId: deviceId });
+      user = await fetchUserByDeviceId(deviceId);
     }
 
     /* ──────────────────────────────────────────
@@ -71,7 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!Email || !Password || !deviceId) {
         return res.status(400).json({ message: "Credentials and deviceId are required." });
       }
-      user = await usersCollection.findOne({ Email });
+      user = await fetchUserByEmail(Email);
       if (user) {
         const result = await validateUser({ Email, Password });
         if (result.success) isVerified = true;
@@ -107,26 +107,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (!isVerified) {
       const attempts = (user.LoginAttempts || 0) + 1;
       if (attempts >= 5) {
-        await usersCollection.updateOne(
-          { _id: user._id },
-          { $set: { Status: "Locked", LoginAttempts: attempts } }
-        );
+        await updateUser(user.id, {
+          Status: "Locked",
+          LoginAttempts: attempts,
+        });
         return res.status(403).json({ message: "Account Is Locked.", locked: true });
       }
-      await usersCollection.updateOne({ _id: user._id }, { $set: { LoginAttempts: attempts } });
+      await updateUser(user.id, { LoginAttempts: attempts });
       return res.status(401).json({ message: `Invalid credentials. Attempt ${attempts}/5` });
     }
 
     /* ── Success ── */
     // For password / PIN modes, update DeviceId and reset attempts
     if (mode !== "biometric") {
-      await usersCollection.updateOne(
-        { _id: user._id },
-        { $set: { LoginAttempts: 0, Status: "Active", DeviceId: deviceId, LastLoginAt: new Date() } }
-      );
+      await updateUser(user.id, {
+        LoginAttempts: 0,
+        Status: "Active",
+        DeviceId: deviceId,
+        LastLoginAt: new Date().toISOString(),
+      });
     }
 
-    const resolvedUserId = user._id.toString();
+    const resolvedUserId = user.id.toString();
 
     res.setHeader("Set-Cookie", serialize("session", resolvedUserId, {
       httpOnly: true,
@@ -139,7 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       message: "Login successful",
       userId:     resolvedUserId,
-      Firstname:  user.Firstname || user.Username,
+      Firstname:  user.Firstname || user.userName,
       Role:       user.Role,
       Department: user.Department,
       Email:      user.Email,

@@ -192,7 +192,7 @@ export function CollaborationHub({
     }
   }, [isOpen, messages, currentUserId, effectiveDocId, collectionName, userDepartment]);
 
-  // FEATURE: FETCH USER NAMES FOR SEEN BY
+  // FEATURE: FETCH USER NAMES FOR SEEN BY - Only fetch missing users, use memoization
   useEffect(() => {
     const fetchUserNames = async () => {
       const allSeenByIds = new Set<string>();
@@ -223,7 +223,7 @@ export function CollaborationHub({
     if (messages.length > 0) {
       fetchUserNames();
     }
-  }, [messages, userNamesMap]);
+  }, [messages]); // Only depend on messages, NOT userNamesMap
 
   const scrollToMessage = (msgId: string) => {
     const element = document.getElementById(`msg-${msgId}`);

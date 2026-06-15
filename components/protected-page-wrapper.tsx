@@ -68,8 +68,8 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
         }
 
         // 2. ROLE & BYPASS LOGIC (FIRESTORE)
-        // Kung IT ang department, bypass na ang checking ng Role
-        if (userDept !== "IT" && finalUserId) {
+        // Kung IT o PROCUREMENT ang department, bypass na ang checking ng Role
+        if (userDept !== "IT" && userDept !== "PROCUREMENT" && finalUserId) {
           const userDoc = await getDoc(doc(db, "users", finalUserId));
 
           if (userDoc.exists()) {
@@ -84,7 +84,7 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
               return;
             }
           } else {
-            // Kung wala sa Firestore at HINDI IT, ituring na GUEST
+            // Kung wala sa Firestore at HINDI IT/PROCUREMENT, ituring na GUEST
             if (pathname.startsWith("/dashboard")) {
               setAccessDenied(true);
               setLoading(false);
