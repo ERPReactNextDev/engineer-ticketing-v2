@@ -50,8 +50,8 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
         const API_BASE = isLocal
           ? "http://localhost:3000"
           : isVercel
-            ? "https://engiconnect.vercel.app"
-            : "https://conx.mtechsolutions.cloud";
+            ? "https://engineer-ticketing-v2.vercel.app"
+            : "https://connecx.devtech-erp-solutions.cloud";
 
         const headers: HeadersInit = { "x-device-id": deviceId };
         if (finalUserId) headers["x-delegated-user-id"] = finalUserId;
