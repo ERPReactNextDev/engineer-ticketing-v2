@@ -32,9 +32,7 @@ export async function middleware(request: NextRequest) {
         "https://taskflow-project-five-gamma.vercel.app",
         "https://taskflow-demo-v2.vercel.app/",
         "https://taskflow-crm.vercel.app/",
-        "https://taskflow.devtech-erp-solutions.cloud/",
-        "https://conx.devtech-erp-solutions.cloud/login",
-        "https://conx.devtech-erp-solutions.cloud"
+        "https://taskflow.devtech-erp-solutions.cloud/"
       ]
 
       // Combine and unique

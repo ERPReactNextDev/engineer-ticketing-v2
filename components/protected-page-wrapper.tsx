@@ -51,7 +51,7 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
           ? "http://localhost:3000"
           : isVercel
             ? "https://engineer-ticketing-v2.vercel.app"
-            : "https://connecx.devtech-erp-solutions.cloud";
+            : "https://conx.devtech-erp-solutions.cloud";
 
         const headers: HeadersInit = { "x-device-id": deviceId };
         if (finalUserId) headers["x-delegated-user-id"] = finalUserId;
