@@ -30,13 +30,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const userMap: Record<string, { firstName: string; lastName: string; userName: string; profilePicture?: string; department?: string }> = {};
     
     users?.forEach(user => {
-      userMap[user.id.toString()] = {
-        firstName: user.Firstname || "",
-        lastName: user.Lastname || "",
-        userName: user.userName || "",
-        profilePicture: user.profilePicture || "",
-        department: user.Department || ""
-      };
+      // Use the id field as string to match Firebase seenBy IDs
+      const userId = user.id?.toString();
+      if (userId) {
+        userMap[userId] = {
+          firstName: user.Firstname || "",
+          lastName: user.Lastname || "",
+          userName: user.userName || "",
+          profilePicture: user.profilePicture || "",
+          department: user.Department || ""
+        };
+      }
     });
 
     return res.status(200).json({ users: userMap });
