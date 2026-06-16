@@ -1,10 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-
+  // 2. Remote Image Whitelisting (Fixes the Cloudinary Error)
   images: {
     remotePatterns: [
       {
@@ -15,9 +12,10 @@ const nextConfig = {
     ],
   },
 
+  // 3. Security Headers (Managed via Middleware for Dynamic IT Control)
   async headers() {
     return [];
   },
-} as NextConfig;
+};
 
 export default nextConfig;
