@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 interface SeenByUser {
   firstName: string;
   lastName: string;
-  userName: string;
+  userName: string; //string
   profilePicture?: string;
   department?: string;
 }
@@ -28,7 +28,12 @@ interface SeenByDialogProps {
 }
 
 export function SeenByDialog({ seenByIds, userNamesMap, isMe, currentUserId }: SeenByDialogProps) {
-  if (seenByIds.length === 0) return null;
+  // Filter to only show users with valid Supabase IDs (exist in userNamesMap or are current user)
+  const validSeenByIds = seenByIds.filter(userId => 
+    userId === currentUserId || userNamesMap[userId]
+  );
+
+  if (validSeenByIds.length === 0) return null;
 
   return (
     <Dialog>
@@ -38,7 +43,7 @@ export function SeenByDialog({ seenByIds, userNamesMap, isMe, currentUserId }: S
           onClick={(e) => e.stopPropagation()}
         >
           <Eye size={10} />
-          <span>{seenByIds.length}</span>
+          <span>{validSeenByIds.length}</span>
         </button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
@@ -46,7 +51,7 @@ export function SeenByDialog({ seenByIds, userNamesMap, isMe, currentUserId }: S
           <DialogTitle className="text-lg font-bold">Seen by</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 max-h-[400px] overflow-y-auto">
-          {seenByIds.map((userId) => {
+          {validSeenByIds.map((userId) => {
             const isCurrentUser = userId === currentUserId;
             const user = userNamesMap[userId];
             
@@ -55,24 +60,24 @@ export function SeenByDialog({ seenByIds, userNamesMap, isMe, currentUserId }: S
               return (
                 <div
                   key={userId}
-                  className="flex items-center gap-3 p-2 rounded-lg bg-blue-600/5 border border-blue-600/20"
+                  className="flex items-center gap-3 p-2 rounded-lg bg-[#be2d2d]/5 border border-[#be2d2d]/20"
                 >
-                  <Avatar className="h-12 w-12 border-2 border-blue-600">
+                  <Avatar className="h-12 w-12 border-2 border-[#be2d2d]">
                     <AvatarImage 
                       src={user?.profilePicture} 
                       alt="You"
                       className="object-cover"
                     />
-                    <AvatarFallback className="bg-blue-600 text-white font-semibold">
+                    <AvatarFallback className="bg-[#be2d2d] text-white font-semibold">
                       You
                     </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0">
-                    <p className="font-bold text-sm text-blue-600 truncate">
+                    <p className="font-bold text-sm text-[#be2d2d] truncate">
                       You {user ? `(${user.firstName} ${user.lastName})` : ''}
                     </p>
                     {user?.department && (
-                      <p className="text-xs text-blue-600/70 truncate">
+                      <p className="text-xs text-[#be2d2d]/70 truncate">
                         @{user.department}
                       </p>
                     )}
@@ -94,12 +99,12 @@ export function SeenByDialog({ seenByIds, userNamesMap, isMe, currentUserId }: S
                     alt={`${user.firstName} ${user.lastName}`}
                     className="object-cover"
                   />
-                  <AvatarFallback className="bg-blue-600 text-white font-semibold">
+                  <AvatarFallback className="bg-[#be2d2d] text-white font-semibold">
                     {user.firstName.charAt(0)}{user.lastName.charAt(0)}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-sm text-slate-900 truncate">
+                  <p className="font-semibold text-sm text-slate-900 truncate">
                     {user.firstName} {user.lastName}
                   </p>
                   {user.department && (
