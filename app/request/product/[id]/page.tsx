@@ -147,6 +147,40 @@ function extractDimensions(packaging: string) {
   if (!match) return { l: "", w: "", h: "" };
   return { l: match[1], w: match[2], h: match[3] };
 }
+
+function parseLightMultiplePackaging(packaging: string) {
+  if (!packaging || packaging === "-") return [];
+  
+  // Parse format: itemName\nQty: X\nL × W × H\nCost: X.XX USD
+  const lines = packaging.split('\n').map(l => l.trim()).filter(Boolean);
+  const items: Array<{ itemName: string; qty: string; dimensions: string; cost: string }> = [];
+  
+  let currentItem: any = {};
+  
+  for (const line of lines) {
+    if (line.startsWith('Qty:')) {
+      currentItem.qty = line.replace('Qty:', '').trim();
+    } else if (line.includes('×') || line.includes('x')) {
+      currentItem.dimensions = line;
+    } else if (line.includes('USD')) {
+      currentItem.cost = line;
+    } else {
+      // This is the item name
+      if (Object.keys(currentItem).length > 0) {
+        items.push({ ...currentItem });
+        currentItem = {};
+      }
+      currentItem.itemName = line;
+    }
+  }
+  
+  // Push the last item
+  if (Object.keys(currentItem).length > 0) {
+    items.push(currentItem);
+  }
+  
+  return items;
+}
 //test
 function getBaseItemCode(itemCode: string) {
   const c = (itemCode || "").trim().toUpperCase();
@@ -1672,9 +1706,30 @@ export default function ProcurementDetailPage() {
                                           </div>
                                           <div className="space-y-1">
                                             <p className="text-sm font-black text-zinc-900">{p.qty} <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest ml-1">Units</span></p>
-                                            <p className="text-sm text-zinc-700 font-medium break-words flex items-start gap-1.5">
-                                              <Truck size={10} className="text-zinc-400 mt-0.5 flex-shrink-0" /> {p.packaging}
-                                            </p>
+                                            {(() => {
+                                              const isLightMultiple = p.commercialType === "Light (Multiple)";
+                                              if (isLightMultiple) {
+                                                const items = parseLightMultiplePackaging(p.packaging);
+                                                return (
+                                                  <div className="space-y-2">
+                                                    {items.map((item, idx) => (
+                                                      <div key={idx} className="space-y-0.5">
+                                                        <p className="text-xs font-bold text-zinc-900">{item.itemName}</p>
+                                                        <p className="text-[10px] text-zinc-600">Qty: {item.qty}</p>
+                                                        <p className="text-[10px] text-zinc-600">Packaging Dimension</p>
+                                                        <p className="text-[10px] text-zinc-700">{item.dimensions}</p>
+                                                        <p className="text-[10px] text-zinc-600">Cost: {item.cost}</p>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                );
+                                              }
+                                              return (
+                                                <p className="text-sm text-zinc-700 font-medium break-words flex items-start gap-1.5">
+                                                  <Truck size={10} className="text-zinc-400 mt-0.5 flex-shrink-0" /> {p.packaging}
+                                                </p>
+                                              );
+                                            })()}
                                           </div>
                                         </div>
 
