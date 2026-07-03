@@ -2391,7 +2391,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                     {/* Totals */}
                     <div className="mt-4 space-y-2 p-3 bg-white/5 rounded-2xl border border-white/10">
                       <div className="flex justify-between items-center">
-                        <p className="text-[8px] font-black text-zinc-500 uppercase tracking-widest">PD Original Total</p>
+                        <p className="text-[8px] font-black text-white/60 uppercase tracking-widest">PD Original Total</p>
                         <p className="text-[10px] font-bold text-zinc-400 line-through">{formatPHP(grandTotalPD)}</p>
                       </div>
                       <div className="flex justify-between items-center">
@@ -2400,8 +2400,8 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                       </div>
                       <div className="h-px bg-white/10" />
                       <div className="flex justify-between items-center">
-                        <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Selling Total</p>
-                        <p className={cn("text-[14px] font-black", grandTotalSelling > 0 ? "text-emerald-300" : "text-zinc-500")}>
+                        <p className="text-[8px] font-black text-white/70 uppercase tracking-widest">Selling Total</p>
+                        <p className={cn("text-[14px] font-black", grandTotalSelling > 0 ? "text-white" : "text-white/50")}>
                           {grandTotalSelling > 0 ? formatPHP(grandTotalSelling) : "—"}
                         </p>
                       </div>
@@ -2409,7 +2409,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                         <>
                           <div className="h-px bg-white/10" />
                           <div className="flex justify-between items-center">
-                            <p className="text-[8px] font-black text-zinc-400 uppercase tracking-widest">Margin (Final PD)</p>
+                            <p className="text-[8px] font-black text-white/70 uppercase tracking-widest">Margin (Final PD)</p>
                             <p className="text-[11px] font-black text-violet-300">
                               {(((grandTotalSelling - grandTotalFinalPD) / grandTotalSelling) * 100).toFixed(1)}%
                             </p>
@@ -2480,7 +2480,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                     {/* Meta info */}
                     <div className="mt-4 pt-4 border-t border-white/10 space-y-2.5">
                       <div className="flex items-center justify-between">
-                        <p className="text-[8px] text-zinc-500 uppercase tracking-widest">Status</p>
+                        <p className="text-[8px] text-white/50 uppercase tracking-widest">Status</p>
                         <div className={cn("flex items-center gap-1.5 px-2.5 py-1 rounded-xl border", statusMeta.bg, statusMeta.border)}>
                           <div className={cn("size-1.5 rounded-full", statusMeta.dot)} />
                           <span className={cn("text-[8px] font-black uppercase", statusMeta.color)}>
@@ -2489,8 +2489,8 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                         </div>
                       </div>
                       <div className="flex items-center justify-between">
-                        <p className="text-[8px] text-zinc-500 uppercase tracking-widest">Created</p>
-                        <p className="text-[9px] font-bold text-zinc-400">
+                        <p className="text-[8px] text-white/50 uppercase tracking-widest">Created</p>
+                        <p className="text-[9px] font-bold text-white/70">
                           {spfData?.date_created
                             ? new Date(spfData.date_created).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
                             : "---"}
@@ -2498,8 +2498,8 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                       </div>
                       {spfData?.date_updated && (
                         <div className="flex items-center justify-between">
-                          <p className="text-[8px] text-zinc-500 uppercase tracking-widest">Last Saved</p>
-                          <p className="text-[9px] font-bold text-zinc-400">
+                          <p className="text-[8px] text-white/50 uppercase tracking-widest">Last Saved</p>
+                          <p className="text-[9px] font-bold text-white/70">
                             {new Date(spfData.date_updated).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                           </p>
                         </div>
