@@ -84,6 +84,8 @@ const getStatusMeta = (status: string) => {
     return { color: "text-violet-600", bg: "bg-violet-50", border: "border-violet-200", dot: "bg-violet-500", glow: "shadow-violet-200" };
   if (s.includes("REJECTED"))
     return { color: "text-rose-600", bg: "bg-rose-50", border: "border-rose-200", dot: "bg-rose-500", glow: "shadow-rose-200" };
+  if (s.includes("PROCESSING BY PD"))
+    return { color: "text-blue-600", bg: "bg-blue-50", border: "border-blue-200", dot: "bg-blue-500", glow: "shadow-blue-200" };
   if (s.includes("PROCUREMENT"))
     return { color: "text-blue-600", bg: "bg-blue-50", border: "border-blue-200", dot: "bg-blue-500", glow: "shadow-blue-200" };
   return { color: "text-amber-600", bg: "bg-amber-50", border: "border-amber-200", dot: "bg-amber-400", glow: "shadow-amber-200" };
@@ -357,6 +359,11 @@ export default function ProcurementDetailPage() {
   const [liveExchangeRate, setLiveExchangeRate] = useState("60");
   const [rateLastUpdated, setRateLastUpdated] = useState<Date | null>(null);
   const [rateLoading, setRateLoading] = useState(false);
+  
+  // Revision History States
+  const [latestRevision, setLatestRevision] = useState<any>(null);
+  const [showRevisionApprovalDialog, setShowRevisionApprovalDialog] = useState(false);
+  const [revisionAction, setRevisionAction] = useState<"approve" | "reject" | null>(null);
 
   // Calculator States
   const [showCalc, setShowCalc] = useState<Record<string, boolean>>({});
@@ -577,6 +584,40 @@ export default function ProcurementDetailPage() {
     }
     if (params.id) load();
   }, [params.id]);
+
+  // Fetch latest revision history
+  useEffect(() => {
+    async function fetchLatestRevision() {
+      if (!spfData?.spf_number) return;
+      
+      try {
+        const { data: revisionData, error } = await supabase
+          .from("spf_request_revision_history")
+          .select("*, remarks")
+          .eq("spf_number", spfData.spf_number)
+          .order("revision_number", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (!error && revisionData) {
+          // Check if this revision is "Requested By" a department (pending approval)
+          if (revisionData.revision_result?.startsWith("Requested By")) {
+            setLatestRevision(revisionData);
+          } else {
+            setLatestRevision(null);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch revision history", e);
+      }
+    }
+    
+    fetchLatestRevision();
+    
+    // Poll for revision updates every 5 seconds
+    const interval = setInterval(fetchLatestRevision, 5000);
+    return () => clearInterval(interval);
+  }, [spfData?.spf_number]);
 
   // Auto-refresh exchange rate
   useEffect(() => {
@@ -912,6 +953,62 @@ export default function ProcurementDetailPage() {
     }
   };
 
+  /* ── REVISION APPROVAL/REJECTION ── */
+  const handleRevisionApproval = async () => {
+    if (!latestRevision?.spf_number) return;
+    
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/request/spf-request-engineering-revision-approve-api", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spf_number: latestRevision.spf_number }),
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.message || "Approval failed");
+      
+      toast.success("Revision approved successfully ✓");
+      setShowRevisionApprovalDialog(false);
+      setLatestRevision(null);
+    } catch (err: any) {
+      toast.error(err.message || "Approval failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRevisionRejection = async () => {
+    if (!latestRevision?.spf_number) return;
+    
+    setIsSaving(true);
+    try {
+      const res = await fetch("/api/request/spf-request-engineering-revision-reject-api", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spf_number: latestRevision.spf_number }),
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.message || "Rejection failed");
+      
+      toast.success("Revision rejected successfully ✓");
+      setShowRevisionApprovalDialog(false);
+      setLatestRevision(null);
+    } catch (err: any) {
+      toast.error(err.message || "Rejection failed");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const openRevisionDialog = (action: "approve" | "reject") => {
+    setRevisionAction(action);
+    setShowRevisionApprovalDialog(true);
+  };
+
   /* ── LOADING ── */
   if (loading) return (
     <div className="h-screen w-full flex flex-col items-center justify-center bg-[#F8FAFA] gap-4">
@@ -1090,6 +1187,47 @@ export default function ProcurementDetailPage() {
                 <p className="text-[11px] font-black text-rose-700">
                   This SPF has been rejected. Costing is locked.
                 </p>
+              </div>
+            )}
+
+            {/* ── REVISION APPROVAL BANNER ── */}
+            {latestRevision && (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 shadow-sm shadow-amber-100">
+                <div className="flex items-center gap-3">
+                  <AlertCircle className="size-4 text-amber-500 flex-shrink-0" />
+                  <div className="flex flex-col">
+                    <p className="text-[11px] font-black text-amber-700">
+                      Revision Request: {latestRevision.revision_result}
+                    </p>
+                    <p className="text-[9px] font-bold text-amber-600">
+                      Revision #{latestRevision.revision_number} · {new Date(latestRevision.revision_date).toLocaleDateString()}
+                    </p>
+                    {latestRevision.remarks && (
+                      <p className="text-[9px] text-amber-800 mt-1 italic">
+                        Remarks: {latestRevision.remarks}
+                      </p>
+                    )}
+                    {latestRevision.spf_revision_remarks_engineering && (
+                      <p className="text-[9px] text-amber-800 mt-1 italic">
+                        Engineering Remarks: {latestRevision.spf_revision_remarks_engineering}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    onClick={() => openRevisionDialog("reject")}
+                    className="h-8 px-4 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-black text-[9px] uppercase tracking-widest"
+                  >
+                    Reject
+                  </Button>
+                  <Button
+                    onClick={() => openRevisionDialog("approve")}
+                    className="h-8 px-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black text-[9px] uppercase tracking-widest"
+                  >
+                    Approve
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -2442,7 +2580,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                       <div className="mt-4 space-y-2">
                         <Button
                           onClick={() => setShowConfirm(true)}
-                          disabled={isSaving}
+                          disabled={isSaving || (spfData?.status || "").toUpperCase().includes("PROCESSING BY PD")}
                           className={cn(
                             "w-full rounded-2xl h-12 font-black text-[10px] uppercase tracking-widest",
                             allFilled
@@ -2694,6 +2832,76 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
             <Button
               variant="ghost"
               onClick={() => setShowConfirm(false)}
+              className="w-full rounded-2xl font-black text-[10px] uppercase tracking-widest h-10 text-zinc-400 hover:text-zinc-600"
+            >
+              Cancel
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── REVISION APPROVAL DIALOG ── */}
+      <Dialog open={showRevisionApprovalDialog} onOpenChange={setShowRevisionApprovalDialog}>
+        <DialogContent className="rounded-[24px] max-w-[400px] w-full p-6 overflow-hidden">
+          <DialogHeader>
+            <div className="flex items-center gap-3 mb-2">
+              <div className={cn(
+                "size-10 rounded-2xl flex items-center justify-center shrink-0",
+                revisionAction === "approve" ? "bg-emerald-600" : "bg-rose-600"
+              )}>
+                {revisionAction === "approve" ? <CheckCircle2 size={16} className="text-white" /> : <XCircle size={16} className="text-white" />}
+              </div>
+              <DialogTitle className="text-[13px] font-black uppercase tracking-widest">
+                {revisionAction === "approve" ? "Approve Revision by Engineering?" : "Reject Revision by Engineering?"}
+              </DialogTitle>
+            </div>
+
+            <div className="space-y-3">
+              <DialogDescription className="text-sm text-zinc-500 leading-relaxed">
+                {revisionAction === "approve" 
+                  ? "This will approve the revision request and update the SPF status to 'For Revision by PD'."
+                  : "This will reject the revision request and revert the SPF to its previous state."
+                }
+              </DialogDescription>
+
+              {latestRevision && (
+                <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-3">
+                  <p className="text-[10px] font-black text-zinc-600 uppercase tracking-wider mb-1">Revision Details</p>
+                  <p className="text-[11px] text-zinc-700">{latestRevision.revision_result}</p>
+                  <p className="text-[9px] text-zinc-500 mt-1">Revision #{latestRevision.revision_number}</p>
+                  {latestRevision.remarks && (
+                    <p className="text-[9px] text-zinc-600 mt-2 italic">Remarks: {latestRevision.remarks}</p>
+                  )}
+                  {latestRevision.spf_revision_remarks_engineering && (
+                    <p className="text-[9px] text-zinc-600 mt-1 italic">Engineering Remarks: {latestRevision.spf_revision_remarks_engineering}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-2 mt-6">
+            <Button
+              onClick={revisionAction === "approve" ? handleRevisionApproval : handleRevisionRejection}
+              disabled={isSaving}
+              className={cn(
+                "w-full text-white rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 shadow-sm",
+                revisionAction === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-rose-600 hover:bg-rose-700"
+              )}
+            >
+              {isSaving ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <>
+                  {revisionAction === "approve" ? <CheckCircle2 className="size-3.5 mr-1.5" /> : <XCircle className="size-3.5 mr-1.5" />}
+                  {revisionAction === "approve" ? "Approve Revision" : "Reject Revision"}
+                </>
+              )}
+            </Button>
+
+            <Button
+              variant="ghost"
+              onClick={() => setShowRevisionApprovalDialog(false)}
               className="w-full rounded-2xl font-black text-[10px] uppercase tracking-widest h-10 text-zinc-400 hover:text-zinc-600"
             >
               Cancel

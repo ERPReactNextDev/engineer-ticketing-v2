@@ -68,6 +68,10 @@ const STATUS_META: Record<string, { label: string; color: string; bg: string; bo
     label: "Pending For Procurement",
     color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200", dot: "bg-amber-400",
   },
+  "PROCESSING BY PD": {
+    label: "Processing By PD",
+    color: "text-blue-700", bg: "bg-blue-50", border: "border-blue-200", dot: "bg-blue-500",
+  },
   "APPROVED BY PROCUREMENT": {
     label: "Approved By Procurement",
     color: "text-emerald-700", bg: "bg-emerald-50", border: "border-emerald-200", dot: "bg-emerald-500",
@@ -107,6 +111,7 @@ function getStatusMeta(status: string) {
   const s = (status || "").toUpperCase().trim()
   if (s.includes("APPROVED BY PROCUREMENT") || s.includes("APPROVED")) return STATUS_META["APPROVED BY PROCUREMENT"]
   if (s.includes("REJECTED"))    return STATUS_META["REJECTED"]
+  if (s.includes("PROCESSING BY PD")) return STATUS_META["PROCESSING BY PD"]
   if (s.includes("PROCUREMENT")) return STATUS_META["PROCUREMENT"]
   return { label: status || "Pending For Procurement", color: "text-amber-700", bg: "bg-amber-50", border: "border-amber-200", dot: "bg-amber-400" }
 }
