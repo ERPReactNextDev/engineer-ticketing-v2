@@ -35,6 +35,7 @@ import { PageHeader } from "@/components/page-header";
 import ProtectedPageWrapper from "@/components/protected-page-wrapper";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { RevisionApprovalPopup } from "@/components/revision-approval-popup";
 
 /* ─────────────────────────────────────────────
    TYPES
@@ -244,6 +245,7 @@ export default function ProcurementCostingPage() {
   const [versionHistory, setVersionHistory] = useState<VersionHistoryItem[]>([]);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [latestRevision, setLatestRevision] = useState<any>(null);
 
   // NEW: Processing Timer
   const [processingTime, setProcessingTime] = useState(0);
@@ -324,6 +326,7 @@ export default function ProcurementCostingPage() {
 
       // Fetch version history
       await fetchVersionHistory();
+      await fetchLatestRevision(); // NEW
 
     } catch (err: any) {
       toast.error("Failed to load data: " + err.message);
@@ -344,6 +347,55 @@ export default function ProcurementCostingPage() {
       setVersionHistory(data || []);
     } catch (err: any) {
       console.error("Failed to fetch version history:", err);
+    }
+  }
+
+  // NEW: Fetch latest pending revision
+  async function fetchLatestRevision() {
+    try {
+      const { data, error } = await supabase
+        .from("spf_revision_requests") // 🔧 palitan kung ibang table name
+        .select("*")
+        .eq("spf_number", spfNumber)
+        .order("revision_number", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      setLatestRevision(data && data.revision_result === "Pending" ? data : null);
+    } catch (err: any) {
+      console.error("Failed to fetch latest revision:", err);
+    }
+  }
+
+  // NEW: Approve/Reject revision handlers
+  async function handleRevisionApprove() {
+    try {
+      const { error } = await supabase
+        .from("spf_revision_requests")
+        .update({ revision_result: "Approved" })
+        .eq("id", latestRevision.id);
+      if (error) throw error;
+      toast.success("Revision approved");
+      setLatestRevision(null);
+      await fetchData();
+    } catch (err: any) {
+      toast.error("Failed to approve revision: " + err.message);
+    }
+  }
+
+  async function handleRevisionReject() {
+    try {
+      const { error } = await supabase
+        .from("spf_revision_requests")
+        .update({ revision_result: "Rejected" })
+        .eq("id", latestRevision.id);
+      if (error) throw error;
+      toast.success("Revision rejected");
+      setLatestRevision(null);
+      await fetchData();
+    } catch (err: any) {
+      toast.error("Failed to reject revision: " + err.message);
     }
   }
 
@@ -1319,11 +1371,16 @@ export default function ProcurementCostingPage() {
             <DialogFooter className="flex flex-col gap-2 mt-4">
               <Button
                 onClick={() => handleSave(true)}
-                disabled={isSaving}
+                disabled={isSaving || !!latestRevision}
                 className="w-full bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest h-12"
               >
                 {isSaving ? <Loader2 className="size-4 animate-spin" /> : <><CheckCircle2 className="size-3.5 mr-1.5" /> Save + Approved By Procurement</>}
               </Button>
+              {latestRevision && (
+                <p className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-100 rounded-xl p-2 text-center -mt-1">
+                  ⚠ May pending revision request pa — asikasuhin muna 'yan bago mag-approve.
+                </p>
+              )}
               <Button
                 variant="outline"
                 onClick={() => handleSave(false)}
@@ -1340,8 +1397,17 @@ export default function ProcurementCostingPage() {
                 Cancel
               </Button>
             </DialogFooter>
-          </DialogContent>
+                    </DialogContent>
         </Dialog>
+
+        {/* NEW: Revision Approval Popup */}
+        {latestRevision && (
+          <RevisionApprovalPopup
+            latestRevision={latestRevision}
+            onApprove={handleRevisionApprove}
+            onReject={handleRevisionReject}
+          />
+        )}
       </SidebarProvider>
     </ProtectedPageWrapper>
   );

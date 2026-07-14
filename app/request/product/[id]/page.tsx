@@ -19,6 +19,7 @@ import {
 import { dbCollab } from "@/lib/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
 import { CollaborationHub } from "@/components/collaboration-hub";
+import { RevisionApprovalPopup } from "@/components/revision-approval-popup";
 
 import { supabase } from "@/utils/supabase";
 import { toast } from "sonner";
@@ -1190,46 +1191,6 @@ export default function ProcurementDetailPage() {
               </div>
             )}
 
-            {/* ── REVISION APPROVAL BANNER ── */}
-            {latestRevision && (
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 shadow-sm shadow-amber-100">
-                <div className="flex items-center gap-3">
-                  <AlertCircle className="size-4 text-amber-500 flex-shrink-0" />
-                  <div className="flex flex-col">
-                    <p className="text-[11px] font-black text-amber-700">
-                      Revision Request: {latestRevision.revision_result}
-                    </p>
-                    <p className="text-[9px] font-bold text-amber-600">
-                      Revision #{latestRevision.revision_number} · {new Date(latestRevision.revision_date).toLocaleDateString()}
-                    </p>
-                    {latestRevision.remarks && (
-                      <p className="text-[9px] text-amber-800 mt-1 italic">
-                        Remarks: {latestRevision.remarks}
-                      </p>
-                    )}
-                    {latestRevision.spf_revision_remarks_engineering && (
-                      <p className="text-[9px] text-amber-800 mt-1 italic">
-                        Engineering Remarks: {latestRevision.spf_revision_remarks_engineering}
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    onClick={() => openRevisionDialog("reject")}
-                    className="h-8 px-4 bg-rose-500 hover:bg-rose-600 text-white rounded-xl font-black text-[9px] uppercase tracking-widest"
-                  >
-                    Reject
-                  </Button>
-                  <Button
-                    onClick={() => openRevisionDialog("approve")}
-                    className="h-8 px-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-black text-[9px] uppercase tracking-widest"
-                  >
-                    Approve
-                  </Button>
-                </div>
-              </div>
-            )}
 
             {/* ── HEADER CARD ── */}
             <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
@@ -2580,7 +2541,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                       <div className="mt-4 space-y-2">
                         <Button
                           onClick={() => setShowConfirm(true)}
-                          disabled={isSaving || (spfData?.status || "").toUpperCase().includes("PROCESSING BY PD")}
+                          disabled={isSaving || (spfData?.status || "").toUpperCase().includes("PROCESSING BY PD") || !!latestRevision}
                           className={cn(
                             "w-full rounded-2xl h-12 font-black text-[10px] uppercase tracking-widest",
                             allFilled
@@ -2807,7 +2768,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
           <div className="flex flex-col gap-2 mt-6">
             <Button
               onClick={() => handleSave(true)}
-              disabled={isSaving}
+              disabled={isSaving || !!latestRevision}
               className="w-full bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 shadow-sm"
             >
               {isSaving ? (
@@ -2823,7 +2784,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
             <Button
               variant="outline"
               onClick={() => handleSave(false)}
-              disabled={isSaving}
+              disabled={isSaving || !!latestRevision}
               className="w-full rounded-2xl border-zinc-200 font-black text-[10px] uppercase tracking-widest h-12 hover:bg-zinc-50"
             >
               Save Only (Keep Pending)
@@ -2909,6 +2870,13 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── REVISION APPROVAL POPUP ── */}
+      <RevisionApprovalPopup
+        latestRevision={latestRevision}
+        onApprove={() => openRevisionDialog("approve")}
+        onReject={() => openRevisionDialog("reject")}
+      />
 
     </ProtectedPageWrapper>
   );
