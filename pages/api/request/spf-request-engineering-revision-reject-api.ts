@@ -21,23 +21,29 @@ export default async function handler(
   // Get current user from session
   const cookies = req.headers.cookie ? parse(req.headers.cookie) : {};
   const sessionUserId = cookies.session;
+  const userDeptFromCookie = cookies.department?.toUpperCase() || "";
 
   if (!sessionUserId) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
   // Fetch user's Department based on logged-in user
-  const { data: userData, error: userError } = await supabase
-    .from("users")
-    .select("Department")
-    .eq("id", sessionUserId)
-    .single();
+  // IT and PROCUREMENT departments bypass strict role checking
+  let userDepartment = userDeptFromCookie;
+  
+  if (userDeptFromCookie !== "IT" && userDeptFromCookie !== "PROCUREMENT") {
+    const { data: userData, error: userError } = await supabase
+      .from("users")
+      .select("Department")
+      .eq("id", sessionUserId)
+      .single();
 
-  if (userError || !userData) {
-    return res.status(401).json({ message: "Unauthorized" });
+    if (userError || !userData) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    userDepartment = userData.Department;
   }
-
-  const userDepartment = userData.Department;
 
   try {
     // Fetch current spf_creation data to get previous_status
