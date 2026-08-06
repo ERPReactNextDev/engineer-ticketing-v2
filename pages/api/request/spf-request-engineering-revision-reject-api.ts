@@ -26,22 +26,27 @@ export default async function handler(
   // Fetch user's Department based on logged-in user
   // IT and PROCUREMENT departments bypass strict role checking
   let userDepartment = userDeptFromCookie;
-  
+
   if (userDeptFromCookie !== "IT" && userDeptFromCookie !== "PROCUREMENT") {
-    const { data: userData, error: userError } = await supabase
+    const { data: userData } = await supabase
       .from("users")
       .select("Department")
       .eq("id", sessionUserId)
       .single();
 
-    if (userError || !userData) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    userDepartment = userData.Department;
+    userDepartment = userData?.Department || userDeptFromCookie;
   }
 
   try {
+    // Fetch current spf_creation data to get previous_status
+    const { data: creationData, error: fetchError } = await supabase
+      .from("spf_creation")
+      .select("status, previous_status")
+      .eq("spf_number", spf_number)
+      .single();
+
+    if (fetchError) throw fetchError;
+
     // Fetch the latest revision history record for this spf_number
     const { data: latestRevision, error: revisionError } = await supabase
       .from("spf_request_revision_history")
@@ -71,25 +76,28 @@ export default async function handler(
         ...revisionDataWithoutId,
         date_created: new Date().toISOString(),
         date_updated: new Date().toISOString(),
-        spf_revision_approval_sales_status: "Ongoing",
+        spf_revision_approval_sales_status: "Rejected",
         spf_revision_approval_sales_date: new Date().toISOString(),
         revision_number: nextRevisionNumber,
-        revision_result: `Request Approved By ${userDepartment}`,
+        revision_result: `Request Rejected By ${userDepartment}`,
         revision_date: new Date().toISOString(),
       });
 
     if (historyError) throw historyError;
 
-    // Update spf_creation status to "For Revision by PD"
-    const { error: creationError } = await supabase
-      .from("spf_creation")
-      .update({
-        status: "For Revision by PD",
-        date_updated: new Date().toISOString()
-      })
-      .eq("spf_number", spf_number);
+    // Revert spf_creation to previous status
+    if (creationData?.previous_status) {
+      const { error: creationError } = await supabase
+        .from("spf_creation")
+        .update({
+          status: creationData.previous_status,
+          previous_status: null,
+          date_updated: new Date().toISOString()
+        })
+        .eq("spf_number", spf_number);
 
-    if (creationError) throw creationError;
+      if (creationError) throw creationError;
+    }
 
     // Broadcast to collaboration hub
     try {
@@ -97,7 +105,7 @@ export default async function handler(
       await updateDoc(docRef, {
         messages: arrayUnion({
           id: `sys-${Date.now()}`,
-          text: `REVISION APPROVED BY ${userDepartment.toUpperCase()}`,
+          text: `REVISION REJECTED BY ${userDepartment.toUpperCase()}`,
           senderId: "system",
           senderName: "System",
           role: "system",
@@ -113,7 +121,7 @@ export default async function handler(
 
     return res.status(200).json({
       success: true,
-      message: "Revision approved by Engineering"
+      message: "Revision rejected by Engineering"
     });
 
   } catch (err: any) {
