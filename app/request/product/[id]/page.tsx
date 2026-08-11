@@ -601,8 +601,8 @@ export default function ProcurementDetailPage() {
           .single();
 
         if (!error && revisionData) {
-          // Check if this revision is "Requested By" a department (pending approval)
-          if (revisionData.revision_result?.startsWith("Requested By")) {
+          // Check if this revision is "Requested By" a department or "Requested by TL" (pending approval)
+          if (revisionData.revision_result?.startsWith("Requested By") || revisionData.revision_result === "Requested by TL") {
             setLatestRevision(revisionData);
           } else {
             setLatestRevision(null);
@@ -2820,7 +2820,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
             <div className="space-y-3">
               <DialogDescription className="text-sm text-zinc-500 leading-relaxed">
                 {revisionAction === "approve" 
-                  ? "This will approve the revision request and update the SPF status to 'For Revision by PD'."
+                  ? "This will approve the revision request and update the SPF status to 'For Revision by TL'."
                   : "This will reject the revision request and revert the SPF to its previous state."
                 }
               </DialogDescription>

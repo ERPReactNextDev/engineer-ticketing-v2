@@ -76,11 +76,11 @@ export default async function handler(
 
     if (historyError) throw historyError;
 
-    // Update spf_creation status to "For Revision by PD"
+    // Update spf_creation status to "For Revision by TL"
     const { error: creationError } = await supabase
       .from("spf_creation")
       .update({
-        status: "For Revision by PD",
+        status: "For Revision by TL",
         date_updated: new Date().toISOString()
       })
       .eq("spf_number", spf_number);
