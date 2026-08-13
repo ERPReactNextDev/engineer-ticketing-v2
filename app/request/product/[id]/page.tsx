@@ -70,6 +70,7 @@ interface ProductCell {
   commercialType: string;
   spfRemarksPd: string;
   spfRemarksProcurement: string;
+  supplierModelCode: string;
 }
 
 
@@ -266,6 +267,7 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
   const rowProductNames = split(offers.product_name ?? "");
   const rowSpfRemarksPd = offers.spf_remarks_pd ? offers.spf_remarks_pd.split("|ROW|") : [];
   const rowSpfRemarksProcurement = offers.spf_remarks_procurement ? offers.spf_remarks_procurement.split("|ROW|") : [];
+  const rowSupplierModelCodes = split(offers.supplier_model_code ?? "");
 
   const parsed = rowImages.map((rowStr, rIdx) =>
     rowStr.split("|ROW|").map((img, pIdx) => {
@@ -326,6 +328,7 @@ function parseAllProducts(offers: any, exchangeRate: string): ProductCell[][] {
         commercialType: rowCommercialTypes[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
         spfRemarksPd: rowSpfRemarksPd[flatIndex]?.trim() ?? "-",
         spfRemarksProcurement: rowSpfRemarksProcurement[flatIndex]?.trim() ?? "-",
+        supplierModelCode: rowSupplierModelCodes[rIdx]?.split("|ROW|")[pIdx]?.trim() ?? "-",
         rowIndex: rIdx,
         productIndex: pIdx,
       };
@@ -1765,6 +1768,11 @@ export default function ProcurementDetailPage() {
                                           {p.productName && p.productName !== "-" && (
                                             <p className="text-[9px] font-bold text-zinc-600 text-center mt-2 leading-tight px-1">
                                               {p.productName}
+                                            </p>
+                                          )}
+                                          {p.supplierModelCode && p.supplierModelCode !== "-" && (
+                                            <p className="text-[8px] font-semibold text-zinc-500 text-center mt-1 leading-tight px-1">
+                                              {p.supplierModelCode}
                                             </p>
                                           )}
                                         </div>
