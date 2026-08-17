@@ -119,12 +119,13 @@
   * {
     @apply border-border outline-ring/50;
   }
-  html,
-  body {
-    width: 100%;
-    max-width: 100%;
-    overflow-x: hidden;
-  }
+html,
+body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: visible;
+}
   body {
     @apply bg-background text-foreground;
   }

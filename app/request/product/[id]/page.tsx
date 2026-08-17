@@ -13,13 +13,14 @@ import {
   RotateCcw, XCircle, ArrowRight, ArrowUpDown, ArrowUp,
   Calendar, Activity, Percent, Building2, Settings2,
   HelpCircle, Info, Lightbulb, MousePointer2, Sparkles,
-  MessageSquare,
+  MessageSquare, GitBranch, Eye,
 } from "lucide-react";
 
 import { dbCollab } from "@/lib/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
 import { CollaborationHub } from "@/components/collaboration-hub";
 import { RevisionApprovalPopup } from "@/components/revision-approval-popup";
+import { CreationHistoryDialog } from "@/components/creation-history-dialog";
 
 import { supabase } from "@/utils/supabase";
 import { toast } from "sonner";
@@ -34,6 +35,7 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { AppSidebar } from "@/components/app-sidebar";
 import { PageHeader } from "@/components/page-header";
 import ProtectedPageWrapper from "@/components/protected-page-wrapper";
+import { Badge } from "@/components/ui/badge";
 
 /* ─────────────────────────────────────────────
    TYPES
@@ -71,6 +73,16 @@ interface ProductCell {
   spfRemarksPd: string;
   spfRemarksProcurement: string;
   supplierModelCode: string;
+}
+
+interface VersionHistoryItem {
+  id: number;
+  version_number: number;
+  version_label: string;
+  created_at: string;
+  edited_by: string;
+  status: string;
+  changes_summary?: string;
 }
 
 
@@ -369,6 +381,11 @@ export default function ProcurementDetailPage() {
   const [showRevisionApprovalDialog, setShowRevisionApprovalDialog] = useState(false);
   const [revisionAction, setRevisionAction] = useState<"approve" | "reject" | null>(null);
 
+  // Creation History States
+  const [versionHistory, setVersionHistory] = useState<VersionHistoryItem[]>([]);
+  const [showCreationHistory, setShowCreationHistory] = useState(false);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+
   // Calculator States
   const [showCalc, setShowCalc] = useState<Record<string, boolean>>({});
   const [calcStates, setCalcStates] = useState<Record<string, any>>({});
@@ -579,6 +596,9 @@ export default function ProcurementDetailPage() {
             .eq("spf_number", offer.spf_number)
             .single();
           setRequestData(req ?? null);
+          
+          // Fetch version history
+          await fetchVersionHistory(offer.spf_number);
         }
       } catch {
         toast.error("Failed to load procurement record");
@@ -622,6 +642,142 @@ export default function ProcurementDetailPage() {
     const interval = setInterval(fetchLatestRevision, 5000);
     return () => clearInterval(interval);
   }, [spfData?.spf_number]);
+
+  async function fetchVersionHistory(spfNumber: string) {
+    try {
+      const { data, error } = await supabase
+        .from("spf_creation_history")
+        .select("id, version_number, version_label, created_at, edited_by, status")
+        .eq("spf_number", spfNumber)
+        .order("version_number", { ascending: false });
+
+      if (error) throw error;
+      setVersionHistory(data || []);
+    } catch (err: any) {
+      console.error("Failed to fetch version history:", err);
+    }
+  }
+
+  async function loadVersion(versionId: number) {
+    try {
+      const { data, error } = await supabase
+        .from("spf_creation_history")
+        .select("*")
+        .eq("id", versionId)
+        .single();
+
+      if (error) throw error;
+      
+      setSpfData(data);
+      setSelectedVersion(versionId);
+      
+      const currentRate = liveExchangeRate || "60";
+      const parsed = parseAllProducts(data, currentRate);
+      setRows(parsed);
+      
+      // Re-initialize calculator states for this version
+      const initCalcs: Record<string, any> = {};
+      parsed.forEach((r, ri) =>
+        r.forEach((p, pi) => {
+          initCalcs[`${ri}-${pi}`] = {
+            formulaType: "spf_china",
+            l: p.l_db || "",
+            w: p.w_db || "",
+            h: p.h_db || "",
+            qtyPerBox: p.pcs_carton_db || "",
+            shipmentCost: "520000",
+            cbmContainer: "65",
+            invoicePct: "1.01",
+            exchangeRate: currentRate,
+            gp: "75",
+            lpc_containerCost: "600000",
+            lpc_pcsPerContainer: "",
+            lpc_invoicePct: "1.01",
+            lpc_exchangeRate: currentRate,
+            lpc_gp: "54",
+            nc_multiplier: "1.65",
+            nc_exchangeRate: currentRate,
+            nc_gp: "45",
+            ll_srpVatInc: "",
+            ll_multiplier: "1.25",
+            llp_srpVatInc: "",
+            llp_multiplier: "1.25",
+            llp_deliveryFee: "5000",
+          };
+        })
+      );
+      setCalcStates(initCalcs);
+      
+      const exp: Record<number, boolean> = {};
+      parsed.forEach((_, i) => { exp[i] = true; });
+      setExpandedRows(exp);
+      
+      toast.success(`Loaded version ${data.version_number}`);
+    } catch (err: any) {
+      toast.error("Failed to load version: " + err.message);
+    }
+  }
+
+  async function handleBackToLatest() {
+    setSelectedVersion(null);
+    const currentRate = liveExchangeRate || "60";
+    
+    try {
+      const { data: offer, error } = await supabase
+        .from("spf_creation")
+        .select("*")
+        .eq("id", params.id)
+        .single();
+
+      if (error) throw error;
+      setSpfData(offer);
+
+      const parsed = parseAllProducts(offer, currentRate);
+      setRows(parsed);
+      
+      const initCalcs: Record<string, any> = {};
+      parsed.forEach((r, ri) =>
+        r.forEach((p, pi) => {
+          initCalcs[`${ri}-${pi}`] = {
+            formulaType: "spf_china",
+            l: p.l_db || "",
+            w: p.w_db || "",
+            h: p.h_db || "",
+            qtyPerBox: p.pcs_carton_db || "",
+            shipmentCost: "520000",
+            cbmContainer: "65",
+            invoicePct: "1.01",
+            exchangeRate: currentRate,
+            gp: "75",
+            lpc_containerCost: "600000",
+            lpc_pcsPerContainer: "",
+            lpc_invoicePct: "1.01",
+            lpc_exchangeRate: currentRate,
+            lpc_gp: "54",
+            nc_multiplier: "1.65",
+            nc_exchangeRate: currentRate,
+            nc_gp: "45",
+            ll_srpVatInc: "",
+            ll_multiplier: "1.25",
+            llp_srpVatInc: "",
+            llp_multiplier: "1.25",
+            llp_deliveryFee: "5000",
+          };
+        })
+      );
+      setCalcStates(initCalcs);
+      
+      const exp: Record<number, boolean> = {};
+      parsed.forEach((_, i) => { exp[i] = true; });
+      setExpandedRows(exp);
+      
+      await fetchVersionHistory(offer.spf_number);
+      setShowCreationHistory(false);
+      toast.success("Back to latest version");
+    } catch (err: any) {
+      toast.error("Failed to load latest version: " + err.message);
+    }
+  }
 
   // Auto-refresh exchange rate
   useEffect(() => {
@@ -918,7 +1074,7 @@ export default function ProcurementDetailPage() {
 
   /* ── SAVE ── */
   const handleSave = async (markCostingDone: boolean) => {
-    if (isLocked) return;
+    if (isLocked || selectedVersion) return;
     setIsSaving(true);
     try {
       const update: any = {
@@ -1196,7 +1352,7 @@ export default function ProcurementDetailPage() {
 
 
             {/* ── HEADER CARD ── */}
-            <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
+            <div className="sticky top-2 z-40 bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
               {/* Top accent bar */}
               <div className={cn(
                 "h-1 w-full",
@@ -1252,6 +1408,64 @@ export default function ProcurementDetailPage() {
                       {spfData?.status ?? "---"}
                     </span>
                   </div>
+{selectedVersion && (
+                    <div className="flex flex-col items-end gap-2">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="bg-violet-50 border-violet-200 text-violet-700">
+                          <Eye size={10} className="mr-1" />
+                          Viewing History
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleBackToLatest}
+                          className="h-8 px-3 rounded-xl font-black text-[9px] uppercase tracking-widest bg-violet-600 text-white border-violet-600 hover:bg-violet-700"
+                        >
+                          <RefreshCw size={10} className="mr-1" />
+                          Back to Latest
+                        </Button>
+                      </div>
+
+                      {(spfData?.spf_creation_start_time || spfData?.spf_creation_end_time) && (
+                        <div className="flex items-center gap-2">
+                          {spfData?.spf_creation_start_time && (
+                            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-50 border border-amber-100">
+                              <Clock size={8} className="text-amber-500" />
+                              <div className="flex flex-col">
+                                <p className="text-[7px] font-black text-amber-600 uppercase tracking-wider">Start</p>
+                                <p className="text-[8px] font-bold text-amber-700">
+                                  {new Date(spfData.spf_creation_start_time).toLocaleString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit'
+                                  })}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                          {spfData?.spf_creation_end_time && (
+                            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-100">
+                              <CheckCircle2 size={8} className="text-emerald-500" />
+                              <div className="flex flex-col">
+                                <p className="text-[7px] font-black text-emerald-600 uppercase tracking-wider">End</p>
+                                <p className="text-[8px] font-bold text-emerald-700">
+                                  {new Date(spfData.spf_creation_end_time).toLocaleString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit'
+                                  })}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* ── COSTING PROGRESS BAR ── */}
@@ -1300,7 +1514,18 @@ export default function ProcurementDetailPage() {
 
             {/* ── WORKFLOW TIMELINE ── */}
             <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm p-4 md:p-5">
-              <SectionHeader icon={History} title="Workflow Timeline" />
+              <div className="flex items-center justify-between">
+                <SectionHeader icon={History} title="Workflow Timeline" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowCreationHistory(true)}
+                  className="rounded-xl font-black text-[9px] uppercase tracking-widest h-8 px-3"
+                >
+                  <GitBranch size={12} className="mr-1.5" />
+                  History ({versionHistory.length})
+                </Button>
+              </div>
 
               {/* Desktop — horizontal */}
               <div className="hidden md:flex items-center mt-5 overflow-x-auto pb-2 gap-0">
@@ -2548,18 +2773,22 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                     {!isLocked && (
                       <div className="mt-4 space-y-2">
                         <Button
-                          onClick={() => setShowConfirm(true)}
-                          disabled={isSaving || (spfData?.status || "").toUpperCase().includes("PROCESSING BY PD") || !!latestRevision}
+                          onClick={() => !selectedVersion && setShowConfirm(true)}
+                          disabled={isSaving || (spfData?.status || "").toUpperCase().includes("PROCESSING BY PD") || !!latestRevision || !!selectedVersion}
                           className={cn(
                             "w-full rounded-2xl h-12 font-black text-[10px] uppercase tracking-widest",
-                            allFilled
-                              ? "bg-emerald-500 hover:bg-emerald-400 text-white"
-                              : "bg-white text-zinc-900 hover:bg-zinc-100"
+                            selectedVersion
+                              ? "bg-zinc-400 text-zinc-600 cursor-not-allowed"
+                              : allFilled
+                                ? "bg-emerald-500 hover:bg-emerald-400 text-white"
+                                : "bg-white text-zinc-900 hover:bg-zinc-100"
                           )}
                         >
                           {isSaving
                             ? <Loader2 className="size-4 animate-spin" />
-                            : <><Save className="size-3.5 mr-2" />{allFilled ? "Save & Finalize" : "Save Costing"}</>
+                            : selectedVersion
+                              ? <><Eye className="size-3.5 mr-2" />Viewing Only</>
+                              : <><Save className="size-3.5 mr-2" />{allFilled ? "Save & Finalize" : "Save Costing"}</>
                           }
                         </Button>
                         <Button
@@ -2725,19 +2954,29 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
             <div className="size-1.5 rounded-full bg-zinc-300" />
             <p className="text-[9px] font-black text-zinc-500 whitespace-nowrap">{filledCount}/{totalCount}</p>
           </div>
-          <Button
-            onClick={() => setShowConfirm(true)}
-            disabled={isSaving}
-            className={cn(
-              "flex-1 h-12 rounded-2xl font-black text-[10px] uppercase tracking-widest",
-              allFilled ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-zinc-900 hover:bg-zinc-800 text-white"
-            )}
-          >
-            {isSaving
-              ? <Loader2 className="size-4 animate-spin" />
-              : <><Save className="size-3.5 mr-1.5" /> {allFilled ? "Save & Finalize" : "Save Costing"}</>
+          {selectedVersion ? (
+            <Button
+              onClick={handleBackToLatest}
+              className="flex-1 h-12 rounded-2xl font-black text-[10px] uppercase tracking-widest bg-violet-600 hover:bg-violet-700 text-white"
+            >
+              <RefreshCw className="size-3.5 mr-1.5" />
+              Back to Latest
+            </Button>
+          ) : (
+            <Button
+              onClick={() => setShowConfirm(true)}
+              disabled={isSaving}
+              className={cn(
+                "flex-1 h-12 rounded-2xl font-black text-[10px] uppercase tracking-widest",
+                allFilled ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-zinc-900 hover:bg-zinc-800 text-white"
+              )}
+            >
+              {isSaving
+                ? <Loader2 className="size-4 animate-spin" />
+                : <><Save className="size-3.5 mr-1.5" /> {allFilled ? "Save & Finalize" : "Save Costing"}</>
             }
           </Button>
+          )}
         </div>
       )}
 
@@ -2747,21 +2986,44 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
         <DialogContent className="rounded-[24px] max-w-[400px] w-full p-6 overflow-hidden">
           <DialogHeader>
             <div className="flex items-center gap-3 mb-2">
-              <div className="size-10 rounded-2xl bg-zinc-900 flex items-center justify-center shrink-0">
-                <Save size={16} className="text-white" />
+              <div className={cn(
+                "size-10 rounded-2xl flex items-center justify-center shrink-0",
+                selectedVersion ? "bg-violet-600" : "bg-zinc-900"
+              )}>
+                {selectedVersion ? <Eye size={16} className="text-white" /> : <Save size={16} className="text-white" />}
               </div>
               <DialogTitle className="text-[13px] font-black uppercase tracking-widest">
-                Save Costing
+                {selectedVersion ? "Viewing Historical Version" : "Save Costing"}
               </DialogTitle>
             </div>
 
             <div className="space-y-3">
               <DialogDescription className="text-sm text-zinc-500 leading-relaxed">
-                Save selling costs and lead times for this SPF.
-                Choosing <span className="font-black text-emerald-600">Save + Approve</span> will mark this SPF as approved by procurement.
+                {selectedVersion 
+                  ? "You are currently viewing a historical version. To save changes, please return to the latest version using the 'Back to Latest' button in the Creation History dialog."
+                  : <>Save selling costs and lead times for this SPF. Choosing <span className="font-black text-emerald-600">Save + Approve</span> will mark this SPF as approved by procurement.</>
+                }
               </DialogDescription>
 
-              {!allFilled && (
+              {selectedVersion && (
+                <>
+                  <div className="flex items-start gap-2 bg-violet-50 border border-violet-100 rounded-xl p-3 text-violet-600">
+                    <Eye size={14} className="shrink-0" />
+                    <span className="font-bold text-[11px] leading-tight">
+                      Historical versions are read-only. Return to the latest version to make changes.
+                    </span>
+                  </div>
+                  <Button
+                    onClick={handleBackToLatest}
+                    className="w-full bg-violet-600 hover:bg-violet-700 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 shadow-sm"
+                  >
+                    <RefreshCw className="size-3.5 mr-1.5" />
+                    Back to Latest Version
+                  </Button>
+                </>
+              )}
+
+              {!selectedVersion && !allFilled && (
                 <div className="flex items-start gap-2 bg-amber-50 border border-amber-100 rounded-xl p-3 text-amber-600">
                   <span className="text-[14px]">⚠</span>
                   <span className="font-bold text-[11px] leading-tight">
@@ -2775,12 +3037,20 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
           {/* Enforced flex-col and removed default sm:flex-row behavior */}
           <div className="flex flex-col gap-2 mt-6">
             <Button
-              onClick={() => handleSave(true)}
-              disabled={isSaving || !!latestRevision}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 shadow-sm"
+              onClick={() => !selectedVersion && handleSave(true)}
+              disabled={isSaving || !!latestRevision || !!selectedVersion}
+              className={cn(
+                "w-full rounded-2xl font-black text-[10px] uppercase tracking-widest h-12 shadow-sm",
+                selectedVersion ? "bg-zinc-400 text-zinc-600 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 text-white"
+              )}
             >
               {isSaving ? (
                 <Loader2 className="size-4 animate-spin" />
+              ) : selectedVersion ? (
+                <>
+                  <Eye className="size-3.5 mr-1.5" />
+                  Viewing Only
+                </>
               ) : (
                 <>
                   <CheckCircle2 className="size-3.5 mr-1.5" />
@@ -2791,11 +3061,14 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
 
             <Button
               variant="outline"
-              onClick={() => handleSave(false)}
-              disabled={isSaving || !!latestRevision}
-              className="w-full rounded-2xl border-zinc-200 font-black text-[10px] uppercase tracking-widest h-12 hover:bg-zinc-50"
+              onClick={() => !selectedVersion && handleSave(false)}
+              disabled={isSaving || !!latestRevision || !!selectedVersion}
+              className={cn(
+                "w-full rounded-2xl font-black text-[10px] uppercase tracking-widest h-12",
+                selectedVersion ? "border-zinc-300 text-zinc-400 cursor-not-allowed bg-zinc-50" : "border-zinc-200 hover:bg-zinc-50"
+              )}
             >
-              Save Only (Keep Pending)
+              {selectedVersion ? "Viewing Only" : "Save Only (Keep Pending)"}
             </Button>
 
             <Button
@@ -2878,6 +3151,17 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── CREATION HISTORY DIALOG ── */}
+      <CreationHistoryDialog
+        open={showCreationHistory}
+        onOpenChange={setShowCreationHistory}
+        versionHistory={versionHistory}
+        selectedVersion={selectedVersion}
+        onLoadVersion={loadVersion}
+        onBackToLatest={handleBackToLatest}
+        staffNames={staffNames}
+      />
 
       {/* ── REVISION APPROVAL POPUP ── */}
       <RevisionApprovalPopup
