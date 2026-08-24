@@ -76,21 +76,34 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
             const userData = userDoc.data();
             const userRole = userData.Role?.toUpperCase() || "GUEST";
 
-            // PROTECTION LOGIC: I-block ang GUEST kapag sinusubukang pumasok sa /dashboard
-            if (userRole === "GUEST" && pathname.startsWith("/dashboard")) {
-              setAccessDenied(true);
-              setLoading(false);
-              clearInterval(progressInterval);
-              return;
+            // Check role_permissions collection for isDashboardAllowed
+            const rolePermissionId = `${userDept}_${userRole}`;
+            const rolePermissionDoc = await getDoc(doc(db, "role_permissions", rolePermissionId));
+
+            if (rolePermissionDoc.exists()) {
+              const roleData = rolePermissionDoc.data();
+              const isDashboardAllowed = roleData.isDashboardAllowed;
+
+              // If isDashboardAllowed is false, deny access
+              if (isDashboardAllowed === false && pathname.startsWith("/dashboard")) {
+                setAccessDenied(true);
+                setLoading(false);
+                clearInterval(progressInterval);
+                return;
+              }
+            } else {
+              // If no role_permissions doc found, default to checking if role is GUEST
+              if (userRole === "GUEST" && pathname.startsWith("/dashboard")) {
+                setAccessDenied(true);
+                setLoading(false);
+                clearInterval(progressInterval);
+                return;
+              }
             }
           } else {
-            // Kung wala sa Firestore at HINDI IT/PROCUREMENT, ituring na GUEST
-            if (pathname.startsWith("/dashboard")) {
-              setAccessDenied(true);
-              setLoading(false);
-              clearInterval(progressInterval);
-              return;
-            }
+            // Kung wala sa Firestore at HINDI IT/PROCUREMENT, allow access
+            // since Supabase validation already passed via check-session
+            // The check-session API already validated the user from Supabase
           }
         }
 
