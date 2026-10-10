@@ -14,6 +14,16 @@ import { NavUser }      from "./nav-user"
 import { db } from "@/lib/firebase"
 import { collection, onSnapshot, doc, getDoc, getDocs, query } from "firebase/firestore"
 
+// Helper to make API calls to Supabase via API routes
+const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
+  const API_BASE = process.env.NODE_ENV === 'production'
+    ? 'https://engineer-ticketing-v2.vercel.app'
+    : 'http://localhost:3000'
+  const res = await fetch(`${API_BASE}${endpoint}`, options)
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}
+
 import {
   LayoutDashboard, CalendarCheck, FileText, Monitor, ClipboardCheck,
   Package, MoreHorizontal, ThumbsUp, Wrench,
@@ -134,20 +144,26 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
     }
     const run = async () => {
       try {
-        // Fetch both MongoDB and Firestore data
-        const [mongoRes, firestoreDoc] = await Promise.all([
-          fetch(`/api/user?id=${encodeURIComponent(userId)}`),
-          getDoc(doc(db, "users", userId))
-        ])
+        // Fetch MongoDB data
+        const mongoRes = await fetch(`/api/user?id=${encodeURIComponent(userId)}`)
         const mongoData = await mongoRes.json()
-        
+
         const dept = (mongoData.Department || "").toUpperCase()
         const position = (mongoData.Position || "").toUpperCase()
-        
-        // Get full role name from Firestore (for display)
-        const firestoreRoleFull = firestoreDoc.exists() 
-          ? (firestoreDoc.data().Role || firestoreDoc.data().role || "MEMBER").toUpperCase()
-          : "MEMBER"
+
+        // Get role from Supabase engiconnect_role field (primary) or fallback to Role
+        let engiconnectRole = "MEMBER"
+        try {
+          const supabaseRes = await fetch(`/api/user?id=${encodeURIComponent(userId)}`)
+          const supabaseData = await supabaseRes.json()
+          if (supabaseData) {
+            engiconnectRole = (supabaseData.engiconnect_role || supabaseData.Role || "MEMBER").toUpperCase()
+          }
+        } catch (e) {
+          console.error("Failed to fetch Supabase role:", e)
+        }
+
+        const firestoreRoleFull = engiconnectRole
         
         /**
          * ROLE DETECTION:
@@ -185,6 +201,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
         // Update localStorage for consistency with other components
         // Use full role name for permissions lookup (e.g., "TERRITORY SALES MANAGER" not "TSM")
         if (typeof window !== "undefined") {
+          localStorage.setItem("engiconnect_role", displayRole)
           localStorage.setItem("userRole", displayRole)
           localStorage.setItem("userDepartment", dept)
           localStorage.setItem("userRoleShort", logicRole) // Keep abbreviated for logic checks
@@ -208,7 +225,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
     run()
   }, [userId])
 
-  /* ── 2. Fetch role_permissions — single doc read, not full collection ── */
+  /* ── 2. Fetch role_permissions from Supabase via API ── */
   React.useEffect(() => {
     if (!userId) {
       setPermDoc(DEFAULT_PERMS)
@@ -221,39 +238,83 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
     const roleKey  = userDetails.Role.toUpperCase().trim()
     const targetId = `${deptKey}_${roleKey}`
 
-    // FIX: Subscribe only to the single permission doc for this user's dept+role
-    // instead of the entire role_permissions collection.
-    // 1 document read per session instead of N documents on every change.
-    const permDocRef = doc(db, "role_permissions", targetId)
-    const unsub = onSnapshot(permDocRef, async (snap) => {
-      let raw: any = snap.exists() ? { id: snap.id, ...snap.data() } : null
+    const loadPermissions = async () => {
+      try {
+        const permission = await fetchFromAPI(`/api/permissions/role?docId=${targetId}`)
+        let raw: any = permission || null
 
-      // Fallback: if exact doc not found (e.g. role name mismatch), do a one-time
-      // getDocs with a suffix filter — much cheaper than a persistent full-collection listener.
-      if (!raw) {
-        try {
-          const allSnap = await getDocs(collection(db, "role_permissions"))
-          const allDocs = allSnap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]
-          raw = allDocs.find((p: any) => p.id.endsWith(`_${roleKey}`)) || null
-        } catch {
-          // silently fall back to DEFAULT_PERMS
+        // Fallback: if exact doc not found, try to find by role suffix
+        if (!raw) {
+          try {
+            const allPermissions = await fetchFromAPI('/api/permissions/role')
+            const permsArray = Array.isArray(allPermissions) ? allPermissions : []
+            raw = permsArray.find((p: any) => typeof p.doc_id === 'string' && p.doc_id.endsWith(`_${roleKey}`)) || null
+          } catch {
+            // silently fall back to DEFAULT_PERMS
+          }
         }
+
+        setPermDoc(raw ? {
+          services:  { ...DEFAULT_PERMS.services,  ...(raw.services  || {}) },
+          nav:       { ...DEFAULT_PERMS.nav,        ...(raw.nav       || {}) },
+          security:  { ...DEFAULT_PERMS.security,   ...(raw.security  || {}) },
+          account:   { ...DEFAULT_PERMS.account,    ...(raw.account   || {}) },
+          dashboard: { ...DEFAULT_PERMS.dashboard,  ...(raw.dashboard || {}) },
+        } : DEFAULT_PERMS)
+        setPermsLoaded(true)
+      } catch (error) {
+        console.error("Failed to load permissions:", error)
+        setPermDoc(DEFAULT_PERMS)
+        setPermsLoaded(true)
       }
+    }
 
-      setPermDoc(raw ? {
-        services:  { ...DEFAULT_PERMS.services,  ...(raw.services  || {}) },
-        nav:       { ...DEFAULT_PERMS.nav,        ...(raw.nav       || {}) },
-        security:  { ...DEFAULT_PERMS.security,   ...(raw.security  || {}) },
-        account:   { ...DEFAULT_PERMS.account,    ...(raw.account   || {}) },
-        dashboard: { ...DEFAULT_PERMS.dashboard,  ...(raw.dashboard || {}) },
-      } : DEFAULT_PERMS)
-      setPermsLoaded(true)
-    })
-
-    return () => unsub()
+    loadPermissions()
+    // Poll every 30 seconds for changes
+    const interval = setInterval(loadPermissions, 30000)
+    return () => clearInterval(interval)
   }, [userId, userDetails.Department, userDetails.Role])
 
-  /* ── 3. Append userId to links ── */
+  /* ── 3. Poll user status to force logout if resigned/terminated ── */
+  React.useEffect(() => {
+    if (!userId) return
+
+    const checkUserStatus = async () => {
+      try {
+        const deviceId = localStorage.getItem("deviceId") || ""
+        const API_BASE = process.env.NODE_ENV === 'production'
+          ? 'https://engineer-ticketing-v2.vercel.app'
+          : 'http://localhost:3000'
+
+        const res = await fetch(`${API_BASE}/api/check-session`, {
+          method: "GET",
+          headers: { "x-device-id": deviceId }
+        })
+
+        if (res.status !== 200) {
+          const data = await res.json()
+          
+          // If forceLogout is true (Resigned/Terminated), clear session and redirect
+          if (data.forceLogout) {
+            await fetch(`${API_BASE}/api/logout`, { method: "POST" })
+            localStorage.clear()
+            window.location.href = "/login"
+          }
+        }
+      } catch (error) {
+        console.error("User status check error:", error)
+      }
+    }
+
+    // Check immediately on mount
+    checkUserStatus()
+    
+    // Poll every 30 seconds
+    const interval = setInterval(checkUserStatus, 30000)
+    return () => clearInterval(interval)
+  }, [userId])
+
+  /* ── 4. Append userId to links ── */
   const appendId = React.useCallback((url: string) =>
     userId
       ? url.includes("?") ? `${url}&userId=${userId}` : `${url}?userId=${userId}`
@@ -261,7 +322,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
     [userId]
   )
 
-  /* ── 4. Build nav ── */
+  /* ── 5. Build nav ── */
   const { navMain, navSecondary } = React.useMemo(() => {
     if (!permsLoaded) return { navMain: [], navSecondary: [] }
 

@@ -23,6 +23,16 @@ import ProtectedPageWrapper from "@/components/protected-page-wrapper"
 import { db } from "@/lib/firebase"
 import { doc, getDoc, onSnapshot } from "firebase/firestore"
 
+// Helper to make API calls to Supabase via API routes
+const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
+  const API_BASE = process.env.NODE_ENV === 'production'
+    ? 'https://engineer-ticketing-v2.vercel.app'
+    : 'http://localhost:3000'
+  const res = await fetch(`${API_BASE}${endpoint}`, options)
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}
+
 import {
   Dialog, DialogContent, DialogDescription,
   DialogHeader, DialogTitle, DialogTrigger,
@@ -159,29 +169,35 @@ export default function SecurityPage() {
     setPassLastChanged(localStorage.getItem(LAST_CHANGED_KEY(uid)))
   }, [])
 
-  /* ── Subscribe to role_permissions → security section ── */
+  /* ── Subscribe to role_permissions → security section from Supabase ── */
   React.useEffect(() => {
     const dept = localStorage.getItem("userDepartment") || ""
-    const role = localStorage.getItem("userRole")       || "MEMBER"
+    const role = localStorage.getItem("engiconnect_role") || localStorage.getItem("userRole") || "MEMBER"
     if (!dept || !role) return
     const targetId = `${dept.toUpperCase().trim()}_${role.toUpperCase().trim()}`
-    // Use onSnapshot on the specific document — not the whole collection
-    const unsub = onSnapshot(doc(db, "role_permissions", targetId), (snap) => {
-      if (snap.exists()) {
-        const raw = snap.data()
-        if (raw?.security) setSecPerms(prev => ({ ...prev, ...raw.security }))
-      } else {
-        // Fallback: try matching by role suffix only
-        const fallbackId = `_${role.toUpperCase().trim()}`
-        getDoc(doc(db, "role_permissions", fallbackId)).then(fallbackSnap => {
-          if (fallbackSnap.exists()) {
-            const raw = fallbackSnap.data()
-            if (raw?.security) setSecPerms(prev => ({ ...prev, ...raw.security }))
+
+    const loadSecurityPerms = async () => {
+      try {
+        const permission = await fetchFromAPI(`/api/permissions/role?docId=${targetId}`)
+        if (permission?.security) {
+          setSecPerms(prev => ({ ...prev, ...permission.security }))
+        } else {
+          // Fallback: try matching by role suffix only
+          const fallbackId = `_${role.toUpperCase().trim()}`
+          const fallbackPermission = await fetchFromAPI(`/api/permissions/role?docId=${fallbackId}`)
+          if (fallbackPermission?.security) {
+            setSecPerms(prev => ({ ...prev, ...fallbackPermission.security }))
           }
-        }).catch(() => {})
+        }
+      } catch (error) {
+        console.error("Failed to load security permissions:", error)
       }
-    })
-    return () => unsub()
+    }
+
+    loadSecurityPerms()
+    // Poll every 30 seconds for changes
+    const interval = setInterval(loadSecurityPerms, 30000)
+    return () => clearInterval(interval)
   }, [])
 
   const { score, level, color, barColor, items: scoreItems } = useSecurityScore(hasPinSet, biometrics, twoFactor, passLastChanged)

@@ -24,6 +24,16 @@ import {
 import { db } from "@/lib/firebase";
 import { collection, query, where, onSnapshot, limit, orderBy, doc, getDoc, getDocs } from "firebase/firestore";
 import { cn } from "@/lib/utils";
+
+// Helper to make API calls to Supabase via API routes
+const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
+  const API_BASE = process.env.NODE_ENV === 'production'
+    ? 'https://engineer-ticketing-v2.vercel.app'
+    : 'http://localhost:3000'
+  const res = await fetch(`${API_BASE}${endpoint}`, options)
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}
 import { 
     isAfter, 
     format, 
@@ -973,7 +983,6 @@ export default function EngiconnectDashboard() {
     const [isDataLoading, setIsDataLoading] = useState<boolean>(true)
     const [currentTime, setCurrentTime] = useState(new Date())
     const [weather, setWeather] = useState({ temp: "--", condition: "Syncing...", code: 0 })
-    const [dynamicPermissions, setDynamicPermissions] = useState<any[]>([])
     const [currentPage, setCurrentPage] = useState(0)
     const scrollRef = useRef<HTMLDivElement>(null)
     const notifRef = useRef<HTMLDivElement>(null)
@@ -1022,21 +1031,38 @@ export default function EngiconnectDashboard() {
                 const position = (mongoData.Position || "").toUpperCase()
                 const userDoc = await getDoc(doc(db, "users", storedUserId))
                 const firestoreRole = (userDoc.exists() ? (userDoc.data().Role || userDoc.data().role || "MEMBER") : "MEMBER").toUpperCase()
+                const primaryRole = (mongoData.engiconnect_role || mongoData.Role || firestoreRole).toUpperCase().trim()
                 const isSalesDept = dept === "SALES"
                 const isAdminDept = dept === "ADMIN"
-                const isManager = firestoreRole === "MANAGER" || firestoreRole === "SALES HEAD" || (isSalesDept && (position === "MANAGER" || position === "SALES HEAD" || position.includes("GENERAL MANAGER"))) || (isAdminDept && position.includes("MANAGER"))
-                const isTSM = firestoreRole === "TSM" || firestoreRole === "TERRITORY SALES MANAGER" || (isSalesDept && position.includes("TERRITORY SALES MANAGER"))
+                const isManager = primaryRole === "MANAGER" || primaryRole === "SALES HEAD" || (isSalesDept && (position === "MANAGER" || position === "SALES HEAD" || position.includes("GENERAL MANAGER"))) || (isAdminDept && position.includes("MANAGER"))
+                const isTSM = primaryRole === "TSM" || primaryRole === "TERRITORY SALES MANAGER" || (isSalesDept && position.includes("TERRITORY SALES MANAGER"))
                 const isTSA = isSalesDept && position.includes("TERRITORY SALES ASSOCIATE")
                 // Use full position name for Sales and Admin depts so permission lookup matches Firestore doc IDs
                 // e.g. SALES_TERRITORY SALES ASSOCIATE, ADMIN_STAFF, ADMIN_MANAGER
-                const finalRole = isManager ? "MANAGER" : isTSM ? "TSM" : ((isSalesDept || isAdminDept) && position ? position : firestoreRole)
+                const finalRole = isManager ? "MANAGER" : isTSM ? "TSM" : ((isSalesDept || isAdminDept) && position ? position : primaryRole)
+                const permissionRole = ((isSalesDept || isAdminDept) && position && !position.includes("MEMBER")) ? position : primaryRole
                 setUserDetails({ Firstname: mongoData.Firstname || "User", Position: mongoData.Position || "Member", Department: dept, profilePicture: mongoData.profilePicture || "" })
                 setUserDept(dept); setUserRole(finalRole)
                 // Set default dashboard tab based on department
                 const deptUpper = (dept || "").toUpperCase()
                 if (deptUpper === "ADMIN") setActiveTab("Overview")
                 else if (deptUpper === "PROCUREMENT" || deptUpper === "WAREHOUSE OPERATIONS") setActiveTab("Product Requests")
-                localStorage.setItem("userDepartment", dept); localStorage.setItem("userRole", finalRole); localStorage.setItem("userName", mongoData.Firstname || "User")
+                localStorage.setItem("userDepartment", dept); localStorage.setItem("engiconnect_role", permissionRole); localStorage.setItem("userRole", finalRole); localStorage.setItem("userName", mongoData.Firstname || "User")
+                const permissionId = `${(dept || "").toUpperCase().trim()}_${permissionRole.toUpperCase().trim()}`
+                try {
+                    const permission = await fetchFromAPI(`/api/permissions/role?docId=${encodeURIComponent(permissionId)}`)
+                    setPerms(permission)
+                } catch {
+                    try {
+                        const allPermissions = await fetchFromAPI("/api/permissions/role")
+                        const permission = Array.isArray(allPermissions)
+                            ? allPermissions.find((item: any) => typeof item.doc_id === "string" && item.doc_id.endsWith(`_${permissionRole.toUpperCase().trim()}`))
+                            : null
+                        setPerms(permission || null)
+                    } catch {
+                        setPerms(null)
+                    }
+                }
                 if (isTSM || isManager) {
                     const usersRes = await fetch('/api/user')
                     const allUsers: any[] = await usersRes.json()
@@ -1064,35 +1090,9 @@ export default function EngiconnectDashboard() {
                 setLoadingCustomerCount(true)
                 const params = new URLSearchParams({ referenceid: mongoData.ReferenceID || "", role: finalRole, name: `${mongoData.Firstname || ""} ${mongoData.Lastname || ""}`.trim(), department: dept, limit: "1" })
                 fetch(`/api/com-fetch-cluster-account?${params.toString()}`).then(res => res.json()).then(result => { setCustomerCount(result.total || 0); setRecentCustomers(result.data?.slice(0, 5) || []) }).finally(() => setLoadingCustomerCount(false))
-            })
-        // FIX: One-time getDocs instead of onSnapshot on the entire role_permissions collection.
-        // Permissions are stable during a session; a persistent listener was re-firing on every
-        // permission change system-wide and downloading all docs to every connected client.
-        getDocs(collection(db, "role_permissions")).then(snap => {
-            const allPerms = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
-            setDynamicPermissions(allPerms)
-            if (storedUserId) {
-                const roleKey = localStorage.getItem("userRole")?.toUpperCase() || "MEMBER"
-                const deptKey = localStorage.getItem("userDepartment")?.toUpperCase().trim() || ""
-                const targetId = deptKey ? `${deptKey}_${roleKey}` : `_${roleKey}`
-                let myPerms = allPerms.find(p => p.id === targetId)
-                if (!myPerms && roleKey === "TSM") {
-                    const altTargetId = deptKey ? `${deptKey}_TERRITORY SALES MANAGER` : `_TERRITORY SALES MANAGER`
-                    myPerms = allPerms.find(p => p.id === altTargetId)
-                }
-                // Admin STAFF fallback
-                if (!myPerms && deptKey === "ADMIN") {
-                    myPerms = allPerms.find(p => p.id === "ADMIN_STAFF") || allPerms.find(p => p.id === "ADMIN_MANAGER")
-                }
-                // Sales TSA fallback
-                if (!myPerms && deptKey === "SALES" && (roleKey === "MEMBER" || roleKey === "TSA")) {
-                    myPerms = allPerms.find(p => p.id === "SALES_TERRITORY SALES ASSOCIATE")
-                }
-                if (!myPerms) myPerms = allPerms.find(p => p.id === targetId) || allPerms.find(p => p.id.endsWith(`_${roleKey}`))
-                setPerms(myPerms)
-            }
-            setIsDataLoading(false)
-        }).catch(() => setIsDataLoading(false))
+            }).catch(error => {
+                console.error("Failed to load dashboard user:", error)
+            }).finally(() => setIsDataLoading(false))
     }, [])
 
     useEffect(() => {
@@ -1373,38 +1373,9 @@ export default function EngiconnectDashboard() {
             { label: "Other Request", icon: MoreHorizontal, count: notifications.otherRequest, msgCount: notifications.unreadByService.others, path: "/request/other", key: "other" },
             { label: "Meeting Rooms", icon: DoorOpen, count: notifications.meetingRoomPending || 0, msgCount: 0, path: "/appointments/meeting-rooms", key: "meetingRoom" },
         ]
-        if (!userRole || dynamicPermissions.length === 0) return []
-        const roleKey = userRole.toUpperCase()
-        const deptKey = userDept ? userDept.toUpperCase().trim() : ""
-
-        // IT dept + SUPER ADMIN always get all services — no Firestore gate needed
-        const isSuperAdmin = roleKey === "SUPER ADMIN"
-        const isIT = deptKey === "IT"
-        if (isIT || isSuperAdmin) return all
-
-        const targetId = deptKey ? `${deptKey}_${roleKey}` : `_${roleKey}`
-        let currentPerms = dynamicPermissions.find(p => p.id === targetId)
-
-        // TSM fallback
-        if (!currentPerms && roleKey === "TSM") {
-            const altId = deptKey ? `${deptKey}_TERRITORY SALES MANAGER` : `_TERRITORY SALES MANAGER`
-            currentPerms = dynamicPermissions.find(p => p.id === altId)
-        }
-        // Sales TSA: Firestore role may be MEMBER/TSA but permission doc uses full position name
-        if (!currentPerms && deptKey === "SALES" && (roleKey === "MEMBER" || roleKey === "TSA")) {
-            currentPerms = dynamicPermissions.find(p => p.id === "SALES_TERRITORY SALES ASSOCIATE")
-        }
-        // Admin STAFF: Firestore role may be MEMBER but permission doc uses STAFF
-        if (!currentPerms && deptKey === "ADMIN" && (roleKey === "MEMBER" || roleKey === "STAFF")) {
-            currentPerms = dynamicPermissions.find(p => p.id === "ADMIN_STAFF")
-        }
-        // Last resort: match by role suffix
-        if (!currentPerms) {
-            currentPerms = dynamicPermissions.find(p => p.id.endsWith(`_${roleKey}`))
-        }
-        if (!currentPerms?.services) return []
-        return all.filter(s => currentPerms.services[s.key === "other" ? "others" : s.key] === true)
-    }, [userRole, userDept, notifications, dynamicPermissions])
+        if (!perms?.services) return []
+        return all.filter(s => perms.services[s.key === "other" ? "others" : s.key] === true)
+    }, [perms, notifications])
 
     // For Admin dept — only count meeting room pending bookings in the bell badge
     const totalNotifications = userDetails.Department?.toUpperCase() === "ADMIN"

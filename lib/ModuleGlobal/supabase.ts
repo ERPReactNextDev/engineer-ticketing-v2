@@ -167,3 +167,166 @@ export async function updateUser(userId: string, updates: Record<string, any>) {
     return false;
   }
 }
+
+// ==================== RBAC PERMISSIONS ====================
+
+// Fetch role permission by doc_id (format: DEPARTMENT_ROLE)
+export async function fetchRolePermission(docId: string) {
+  try {
+    const { data: permission, error } = await supabase
+      .from('role_permissions')
+      .select('*')
+      .eq('doc_id', docId)
+      .single();
+
+    if (error || !permission) {
+      return null;
+    }
+
+    return permission;
+  } catch (error) {
+    console.error('Fetch role permission error:', error);
+    return null;
+  }
+}
+
+// Fetch all role permissions
+export async function fetchAllRolePermissions() {
+  try {
+    const { data: permissions, error } = await supabase
+      .from('role_permissions')
+      .select('*');
+
+    if (error) {
+      console.error('Fetch all role permissions error:', error);
+      return [];
+    }
+
+    return permissions || [];
+  } catch (error) {
+    console.error('Fetch all role permissions error:', error);
+    return [];
+  }
+}
+
+// Save or update role permission
+export async function saveRolePermission(docId: string, data: any) {
+  try {
+    const { error } = await supabase
+      .from('role_permissions')
+      .upsert({
+        doc_id: docId,
+        department: data.department,
+        role: data.role,
+        services: data.services,
+        nav: data.nav,
+        security: data.security,
+        account: data.account,
+        dashboard: data.dashboard,
+        is_dashboard_allowed: data.is_dashboard_allowed,
+        updated_at: new Date().toISOString(),
+        updated_by: data.updatedBy,
+      }, {
+        onConflict: 'doc_id'
+      });
+
+    if (error) {
+      console.error('Save role permission error:', error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Save role permission error:', error);
+    return false;
+  }
+}
+
+// ==================== DEPARTMENT CONFIGS ====================
+
+// Fetch all department configs
+export async function fetchAllDepartmentConfigs() {
+  try {
+    const { data: configs, error } = await supabase
+      .from('department_configs')
+      .select('*')
+      .eq('deleted', false);
+
+    if (error) {
+      console.error('Fetch department configs error:', error);
+      return [];
+    }
+
+    return configs || [];
+  } catch (error) {
+    console.error('Fetch department configs error:', error);
+    return [];
+  }
+}
+
+// Fetch department config by name
+export async function fetchDepartmentConfig(name: string) {
+  try {
+    const { data: config, error } = await supabase
+      .from('department_configs')
+      .select('*')
+      .eq('name', name)
+      .single();
+
+    if (error || !config) {
+      return null;
+    }
+
+    return config;
+  } catch (error) {
+    console.error('Fetch department config error:', error);
+    return null;
+  }
+}
+
+// Save or update department config
+export async function saveDepartmentConfig(name: string, data: any) {
+  try {
+    const { error } = await supabase
+      .from('department_configs')
+      .upsert({
+        name: name,
+        roles: data.roles,
+        color: data.color,
+        deleted: data.deleted || false,
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: 'name'
+      });
+
+    if (error) {
+      console.error('Save department config error:', error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Save department config error:', error);
+    return false;
+  }
+}
+
+// Delete department config (soft delete)
+export async function deleteDepartmentConfig(name: string) {
+  try {
+    const { error } = await supabase
+      .from('department_configs')
+      .update({ deleted: true, updated_at: new Date().toISOString() })
+      .eq('name', name);
+
+    if (error) {
+      console.error('Delete department config error:', error);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Delete department config error:', error);
+    return false;
+  }
+}

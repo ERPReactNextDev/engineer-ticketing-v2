@@ -170,18 +170,29 @@ export default function LoginForm({ className, ...props }: React.ComponentProps<
     setIsAuthorizing(true)
     const { email: loginEmail, deviceId, result } = pendingLoginData
     try {
-      const userDocSnap = await getDoc(doc(db, "users", result.userId))
-      let firestoreRole = "GUEST"
-      if (userDocSnap.exists()) firestoreRole = userDocSnap.data().Role?.toUpperCase() || "GUEST"
+      // Fetch user from Supabase to get engiconnect_role
+      const { data: supabaseUser, error: supabaseError } = await supabase
+        .from('users')
+        .select('engiconnect_role, Role, Firstname, Department')
+        .eq('UserId', result.userId)
+        .single()
 
-      const displayName = result.Firstname || loginEmail?.split("@")[0] || "Staff Member"
-      const userDept    = result.Department?.toUpperCase() || ""
+      let engiconnectRole = "GUEST"
+      let displayName = result.Firstname || loginEmail?.split("@")[0] || "Staff Member"
+      let userDept = result.Department?.toUpperCase() || ""
 
-      localStorage.setItem("userId",        result.userId)
-      localStorage.setItem("userName",       displayName)
-      localStorage.setItem("userRole",       firestoreRole)
+      if (supabaseUser && !supabaseError) {
+        engiconnectRole = supabaseUser.engiconnect_role?.toUpperCase() || supabaseUser.Role?.toUpperCase() || "GUEST"
+        displayName = supabaseUser.Firstname || displayName
+        userDept = supabaseUser.Department?.toUpperCase() || userDept
+      }
+
+      localStorage.setItem("userId", result.userId)
+      localStorage.setItem("userName", displayName)
+      localStorage.setItem("engiconnect_role", engiconnectRole)
+      localStorage.setItem("userRole", engiconnectRole) // Keep for backward compatibility
       localStorage.setItem("userDepartment", userDept)
-      localStorage.setItem("department",     userDept)
+      localStorage.setItem("department", userDept)
 
       await addDoc(collection(logsDb, "activity_logs"), {
         email: loginEmail || result.Email || "System User",

@@ -74,3 +74,54 @@ SUPABASE_SERVICE_ROLE_KEY_USERS=<your_service_role_key>
 - Session cookies work the same way (no changes needed)
 - Device ID tracking still functions as before
 - Delegated session support for multi-app scenarios preserved
+
+---
+
+## Access Denied "Return Home" Button Fix
+
+### Problem
+When users were denied access to certain features (e.g., dashboard, appointments, requests) and clicked the "Return Home" button:
+- Logged-in users with session cookies were redirected to `/` → `/login` → `/dashboard?id={userId}` (circular redirect)
+- This caused confusion as users expected to be taken to their dashboard when logged in
+
+### Solution
+Updated `components/protected-page-wrapper.tsx` to intelligently handle the "Return Home" button behavior:
+
+**Changes made:**
+1. Check if user has valid `userId` in localStorage when access is denied
+2. If logged in (userId exists), redirect directly to `/dashboard?id={userId}`
+3. If not logged in, redirect to `/` (which goes to login page)
+4. Button text remains "Return Home" for simplicity
+
+### Updated Behavior
+- **Logged-in users**: Clicking "Return Home" → `/dashboard?id={userId}` (their dashboard)
+- **Not logged-in users**: Clicking "Return Home" → `/` → login page
+- Session is preserved (no logout occurs)
+- Uses userId from localStorage which matches session cookie value
+
+### Files Modified
+1. `components/protected-page-wrapper.tsx` - Added intelligent routing logic for "Return Home" button
+
+### Code Changes
+```typescript
+// Check if user is logged in (has userId in localStorage)
+const userId = localStorage.getItem("userId")
+const isLoggedIn = userId && userId !== "null"
+
+// If logged in, go to dashboard with their ID; otherwise go to home
+const handleReturnHome = () => {
+  if (isLoggedIn) {
+    router.push(`/dashboard?id=${userId}`)
+  } else {
+    router.push("/")
+  }
+}
+```
+
+### Testing Checklist
+- [ ] Test access denied scenario for logged-in user
+- [ ] Verify "Return Home" button goes to dashboard with user ID
+- [ ] Test access denied scenario for non-logged-in user
+- [ ] Verify "Return Home" button goes to login page
+- [ ] Confirm session cookie is preserved
+- [ ] Test with different access denied scenarios (dashboard, appointments, requests, admin pages)

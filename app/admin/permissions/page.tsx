@@ -14,6 +14,27 @@ import { toast } from "sonner"
 import { db } from "@/lib/firebase"
 import { doc, getDoc, setDoc, onSnapshot, collection } from "firebase/firestore"
 
+// Helper to make API calls to Supabase via API routes
+const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
+  const API_BASE = process.env.NODE_ENV === 'production'
+    ? 'https://engineer-ticketing-v2.vercel.app'
+    : 'http://localhost:3000'
+  
+  // Add userId to headers if available
+  const headers = options?.headers as Record<string, string> || {};
+  const userId = typeof window !== 'undefined' ? localStorage.getItem("userId") : null;
+  if (userId) {
+    headers["x-user-id"] = userId;
+  }
+  
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers,
+  })
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}
+
 import {
     CalendarCheck, FileText, Monitor, ThumbsUp, Wrench,
     ClipboardCheck, Package, MoreHorizontal, Users, ShieldCheck,
@@ -36,77 +57,84 @@ import {
 
 /* ─────────────────────────────────────────────────────────
    PERMISSION SCHEMA
-   This is the complete structure stored in Firestore:
-   role_permissions/{DEPT_ROLE}
+   Aligned with Supabase role_permissions table:
+   - services     → JSONB column with app features
+   - nav          → JSONB column with navigation pages
+   - security     → JSONB column with security features
+   - account      → JSONB column with account settings
+   - dashboard    → JSONB column with home screen sections
 
-   services    → which service tiles appear (dashboard + sidebar)
-   nav         → which sidebar nav sections appear
-   security    → which security page features are accessible
-   account     → which account page features are accessible
-   dashboard   → which dashboard sections are visible
+   Example from DB:
+   {
+     "services": {"dialux": false, "others": false, "testing": false, ...},
+     "nav": {"team": false, "admin": false, ...},
+     "security": {"manage2FA": false, "managePin": true, ...},
+     "account": {"editProfile": true, ...},
+     "dashboard": {"showStats": false, ...}
+   }
 ───────────────────────────────────────────────────────── */
 type PermissionDoc = {
     services: {
+        dialux:         boolean
+        others:         boolean
+        testing:        boolean
         siteVisit:      boolean
         jobRequest:     boolean
-        dialux:         boolean
-        recommendation: boolean
-        shopDrawing:    boolean
-        testing:        boolean
-        productRequest: boolean
-        others:         boolean
         meetingRoom:    boolean
+        shopDrawing:    boolean
+        productRequest: boolean
+        recommendation: boolean
     }
     nav: {
-        team:        boolean   // Staff Directory access
-        admin:       boolean   // Access Rights / Protocols
-        analytics:   boolean   // Analytics page
-        systemSettings: boolean // System Settings (IT only typically)
-        helpCenter:  boolean
+        team:           boolean
+        admin:          boolean
+        analytics:      boolean
+        helpCenter:     boolean
+        systemSettings: boolean
     }
     security: {
-        changePassword:   boolean
-        managePin:        boolean
-        manageBiometrics: boolean
         manage2FA:        boolean
+        managePin:        boolean
+        changePassword:   boolean
         viewActivityLog:  boolean
+        manageBiometrics: boolean
     }
     account: {
-        viewProfile:  boolean
         editProfile:  boolean
         preferences:  boolean
+        viewProfile:  boolean
     }
     dashboard: {
         showStats:          boolean
-        showRecentActivity: boolean
-        showOverviewTabs:   boolean
+        showMyTasks:        boolean
         showSchedule:       boolean
         showAlertBanner:    boolean
-        showMyTasks:        boolean
+        showOverviewTabs:   boolean
+        showRecentActivity: boolean
     }
 }
 
 const DEFAULT_PERMISSIONS: PermissionDoc = {
     services: {
-        siteVisit: false, jobRequest: false, dialux: false,
-        recommendation: false, shopDrawing: false, testing: false,
-        productRequest: false, others: false, meetingRoom: false,
+        dialux: false, others: false, testing: false, siteVisit: false,
+        jobRequest: false, meetingRoom: false, shopDrawing: false,
+        productRequest: false, recommendation: false,
     },
     nav: {
         team: false, admin: false, analytics: false,
-        systemSettings: false, helpCenter: false,
+        helpCenter: false, systemSettings: false,
     },
     security: {
-        changePassword: true, managePin: true, manageBiometrics: true,
-        manage2FA: false, viewActivityLog: true,
+        manage2FA: false, managePin: true, changePassword: true,
+        viewActivityLog: true, manageBiometrics: true,
     },
     account: {
-        viewProfile: true, editProfile: true, preferences: true,
+        editProfile: true, preferences: true, viewProfile: true,
     },
     dashboard: {
-        showStats: true, showRecentActivity: true,
-        showOverviewTabs: true, showSchedule: true, showAlertBanner: true,
-        showMyTasks: true,
+        showStats: false, showMyTasks: false, showSchedule: false,
+        showAlertBanner: false, showOverviewTabs: false,
+        showRecentActivity: false,
     },
 }
 
@@ -160,7 +188,8 @@ const getRoleColorClass = (roleName: string) => {
 /* ─────────────────────────────────────────────────────────
    PERMISSION SECTIONS CONFIG
    Drives the UI — each section has a title, icon,
-   color, and list of toggleable keys with labels
+   color, and list of toggleable keys with labels.
+   Keys MUST match the Supabase JSONB field names exactly.
 ───────────────────────────────────────────────────────── */
 const SECTIONS = [
     {
@@ -191,7 +220,7 @@ const SECTIONS = [
             { key: "team",          label: "Team Directory",       icon: Users },
             { key: "admin",         label: "Access & Permissions", icon: ShieldCheck },
             { key: "analytics",     label: "Analytics",            icon: BarChart3 },
-            { key: "systemSettings",label: "System Settings",      icon: Settings2 },
+            { key: "systemSettings", label: "System Settings",     icon: Settings2 },
             { key: "helpCenter",    label: "Help Center",          icon: BookOpen },
         ],
     },
@@ -431,25 +460,29 @@ function PermissionSection({
                             const ItemIcon = item.icon
                             const isEnabled = !!perms[item.key]
                             return (
-                                <div
+                                <button
                                     key={item.key}
+                                    onClick={() => onChange(item.key, !isEnabled)}
                                     className={cn(
-                                        "flex items-center justify-between px-4 py-3 rounded-2xl border transition-all",
+                                        "flex items-center justify-between px-4 py-3 rounded-2xl border transition-all cursor-pointer active:scale-[0.98]",
                                         isEnabled 
-                                            ? "bg-white border-zinc-200 shadow-sm" 
-                                            : "bg-transparent border-transparent opacity-60 grayscale-[0.5]"
+                                            ? "bg-white border-zinc-200 shadow-sm hover:shadow-md hover:border-zinc-300" 
+                                            : "bg-zinc-50/50 border-zinc-100 opacity-60 hover:opacity-75 hover:bg-zinc-100"
                                     )}
+                                    disabled={isSaving}
                                 >
                                     <div className="flex items-center gap-3 min-w-0">
                                         <div className={cn(
                                             "p-2 rounded-xl transition-colors",
-                                            isEnabled ? "bg-zinc-900 text-white" : "bg-zinc-200 text-zinc-400"
+                                            isEnabled 
+                                                ? "bg-zinc-900 text-white shadow-sm" 
+                                                : "bg-zinc-200 text-zinc-400"
                                         )}>
                                             <ItemIcon className="size-3.5" />
                                         </div>
                                         <span className={cn(
                                             "text-[11px] font-black uppercase tracking-tight truncate",
-                                            isEnabled ? "text-zinc-900" : "text-zinc-400"
+                                            isEnabled ? "text-zinc-900" : "text-zinc-500"
                                         )}>
                                             {item.label}
                                         </span>
@@ -460,7 +493,7 @@ function PermissionSection({
                                         disabled={isSaving}
                                         className="data-[state=checked]:bg-zinc-900"
                                     />
-                                </div>
+                                </button>
                             )
                         })}
                     </div>
@@ -677,6 +710,62 @@ export default function PermissionsPage() {
     const [allConfigs, setAllConfigs] = React.useState<Record<string, PermissionDoc>>({})
     // Guard: only run Admin migration once per session
     const adminMigrationRan = React.useRef(false)
+    // Guard: only run initialization once per session
+    const initializationRan = React.useRef(false)
+
+    React.useEffect(() => {
+        const initializeIfNeeded = async () => {
+            if (initializationRan.current) return
+            initializationRan.current = true
+
+            try {
+                // Try to load permissions
+                const result = await fetchFromAPI('/api/permissions/role')
+                if (!Array.isArray(result) || result.length === 0) {
+                    console.log("No permissions found, initializing with seed data...")
+                    // Initialize with seed data
+                    const seedData = [
+                        {
+                            doc_id: "ENGINEERING_MANAGER",
+                            department: "ENGINEERING",
+                            role: "MANAGER",
+                            services: { dialux: true, others: true, testing: true, siteVisit: true, jobRequest: true, meetingRoom: false, shopDrawing: true, productRequest: false, recommendation: true },
+                            nav: { team: true, admin: true, analytics: true, helpCenter: true, systemSettings: true },
+                            security: { manage2FA: true, managePin: true, changePassword: true, viewActivityLog: true, manageBiometrics: true },
+                            account: { editProfile: true, preferences: true, viewProfile: true },
+                            dashboard: { showStats: true, showAlertBanner: true, showOverviewTabs: true, showRecentActivity: true, showMyTasks: false, showSchedule: false },
+                        },
+                        {
+                            doc_id: "IT_SUPER ADMIN",
+                            department: "IT",
+                            role: "SUPER ADMIN",
+                            services: { dialux: true, others: true, testing: true, siteVisit: true, jobRequest: true, meetingRoom: true, shopDrawing: true, productRequest: true, recommendation: true },
+                            nav: { team: true, admin: true, analytics: true, helpCenter: true, systemSettings: true },
+                            security: { manage2FA: true, managePin: true, changePassword: true, viewActivityLog: true, manageBiometrics: true },
+                            account: { editProfile: true, preferences: true, viewProfile: true },
+                            dashboard: { showStats: true, showAlertBanner: true, showOverviewTabs: true, showRecentActivity: false, showMyTasks: true, showSchedule: true },
+                        },
+                    ]
+
+                    // Save each seed record
+                    for (const data of seedData) {
+                        await fetchFromAPI('/api/permissions/role', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                ...data,
+                                updated_by: "system-init",
+                            })
+                        }).catch(e => console.warn("Seed init error:", e))
+                    }
+                    console.log("Seed data initialized successfully")
+                }
+            } catch (error) {
+                console.warn("Initialization check failed (OK):", error)
+            }
+        }
+        initializeIfNeeded()
+    }, [])
     React.useEffect(() => {
         setUserId(localStorage.getItem("userId"))
     }, [])
@@ -698,68 +787,125 @@ export default function PermissionsPage() {
 
     /* ── Subscribe to all role_permissions docs ── */
     React.useEffect(() => {
-        const unsub = onSnapshot(collection(db, "role_permissions"), snap => {
-            const map: Record<string, PermissionDoc> = {}
-            snap.docs.forEach(d => {
-                map[d.id] = d.data() as PermissionDoc
-            })
-            setAllConfigs(map)
-        })
-        return () => unsub()
+        const loadPermissions = async () => {
+            try {
+                const permissions = await fetchFromAPI('/api/permissions/role')
+                if (Array.isArray(permissions)) {
+                    const map: Record<string, PermissionDoc> = {}
+                    permissions.forEach((p: any) => {
+                        const docId = String(p.doc_id || '')
+                        
+                        // Parse JSON fields from Supabase (may come as strings or objects)
+                        const parseField = (field: any) => {
+                            if (typeof field === 'string') {
+                                try {
+                                    return JSON.parse(field)
+                                } catch {
+                                    return {}
+                                }
+                            }
+                            return field || {}
+                        }
+                        
+                        map[docId] = {
+                            services: parseField(p.services),
+                            nav: parseField(p.nav),
+                            security: parseField(p.security),
+                            account: parseField(p.account),
+                            dashboard: parseField(p.dashboard),
+                        }
+                    })
+                    setAllConfigs(map)
+                }
+            } catch (error) {
+                console.warn("Failed to load permissions (this is OK if table is empty):", error instanceof Error ? error.message : error)
+            }
+        }
+        loadPermissions()
+        // Poll every 30 seconds for changes (since we can't use real-time with Supabase via API)
+        const interval = setInterval(loadPermissions, 30000)
+        return () => clearInterval(interval)
     }, [])
 
-    /* ── Subscribe to department configs from Firestore ── */
+    /* ── Subscribe to department configs from Supabase ── */
     React.useEffect(() => {
-        const unsub = onSnapshot(collection(db, "department_configs"), snap => {
-            const deptList: DepartmentConfig[] = []
-            snap.docs.forEach(d => {
-                const data = d.data()
-                if (data.name && Array.isArray(data.roles) && !data.deleted) {
-                    deptList.push({
-                        name: data.name,
-                        roles: data.roles,
-                        color: data.color
+        const loadDepartments = async () => {
+            try {
+                const configs = await fetchFromAPI('/api/permissions/departments')
+                if (Array.isArray(configs) && configs.length > 0) {
+                    const deptList: DepartmentConfig[] = []
+                    configs.forEach((c: any) => {
+                        if (c.name && Array.isArray(c.roles) && !c.deleted) {
+                            deptList.push({
+                                name: c.name,
+                                roles: c.roles,
+                                color: c.color
+                            })
+                        }
                     })
-                }
-            })
-            // If no departments in Firestore, use defaults
-            if (deptList.length > 0) {
-                setDepartments(deptList)
-                // If selected department isn't in new list, pick first
-                if (!deptList.find(d => d.name === selectedDept)) {
-                    setSelectedDept(deptList[0].name)
-                }
+                    if (deptList.length > 0) {
+                        setDepartments(deptList)
+                        // If selected department isn't in new list, pick first
+                        if (!deptList.find(d => d.name === selectedDept)) {
+                            setSelectedDept(deptList[0].name)
+                        }
 
-                // FIX: Ensure "Admin" department exists with correct roles.
-                // Use a ref to only run this migration ONCE per session, not on every snapshot.
-                const adminDept = deptList.find(d => d.name.toUpperCase() === "ADMIN")
-                const adminHasWrongRoles = adminDept && (
-                    adminDept.roles.length !== 2 ||
-                    !adminDept.roles.includes("STAFF") ||
-                    !adminDept.roles.includes("MANAGER")
-                )
-                if ((!adminDept || adminHasWrongRoles) && !adminMigrationRan.current) {
-                    adminMigrationRan.current = true
-                    const adminDocRef = doc(db, "department_configs", "ADMIN")
-                    setDoc(adminDocRef, {
-                        name: "Admin",
-                        roles: ["STAFF", "MANAGER"],
-                        color: "slate",
-                    }, { merge: true }).catch(console.error)
-                }
-            } else {
-                // Initialize Firestore with default departments if empty
-                const init = async () => {
-                    for (const dept of DEFAULT_DEPARTMENTS) {
-                        const docRef = doc(db, "department_configs", dept.name.toUpperCase())
-                        await setDoc(docRef, dept, { merge: true })
+                        // FIX: Ensure "Admin" department exists with correct roles.
+                        const adminDept = deptList.find(d => d.name.toUpperCase() === "ADMIN")
+                        const adminHasWrongRoles = adminDept && (
+                            adminDept.roles.length !== 2 ||
+                            !adminDept.roles.includes("STAFF") ||
+                            !adminDept.roles.includes("MANAGER")
+                        )
+                        if ((!adminDept || adminHasWrongRoles) && !adminMigrationRan.current) {
+                            adminMigrationRan.current = true
+                            await fetchFromAPI('/api/permissions/departments', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    name: "Admin",
+                                    roles: ["STAFF", "MANAGER"],
+                                    color: "slate",
+                                })
+                            }).catch(console.error)
+                        }
+                    } else {
+                        // No departments found, initialize with defaults
+                        const init = async () => {
+                            for (const dept of DEFAULT_DEPARTMENTS) {
+                                await fetchFromAPI('/api/permissions/departments', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(dept)
+                                }).catch(console.error)
+                            }
+                        }
+                        await init()
+                        setDepartments(DEFAULT_DEPARTMENTS)
                     }
+                } else {
+                    // Empty result, initialize defaults
+                    const init = async () => {
+                        for (const dept of DEFAULT_DEPARTMENTS) {
+                            await fetchFromAPI('/api/permissions/departments', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(dept)
+                            }).catch(console.error)
+                        }
+                    }
+                    await init()
+                    setDepartments(DEFAULT_DEPARTMENTS)
                 }
-                init()
+            } catch (error) {
+                console.warn("Failed to load departments (OK if table is empty), using defaults:", error instanceof Error ? error.message : error)
                 setDepartments(DEFAULT_DEPARTMENTS)
             }
-        })
-        return () => unsub()
+        }
+        loadDepartments()
+        // Poll every 30 seconds for changes
+        const interval = setInterval(loadDepartments, 30000)
+        return () => clearInterval(interval)
     }, [])
 
     /* ── Reset role only when current role is no longer valid for the selected dept ── */
@@ -775,28 +921,47 @@ export default function PermissionsPage() {
             setIsLoading(true)
             setIsDirty(false)
             const docId  = makeDocId(selectedDept, selectedRole)
-            const docRef = doc(db, "role_permissions", docId)
             try {
-                const snap = await getDoc(docRef)
-                if (snap.exists()) {
-                    // Deep merge with defaults to handle missing keys
-                    const data = snap.data() as Partial<PermissionDoc>
-                    const merged: PermissionDoc = {
-                        services:  { ...DEFAULT_PERMISSIONS.services,  ...(data.services  || {}) },
-                        nav:       { ...DEFAULT_PERMISSIONS.nav,        ...(data.nav       || {}) },
-                        security:  { ...DEFAULT_PERMISSIONS.security,   ...(data.security  || {}) },
-                        account:   { ...DEFAULT_PERMISSIONS.account,    ...(data.account   || {}) },
-                        dashboard: { ...DEFAULT_PERMISSIONS.dashboard,  ...(data.dashboard || {}) },
+                const permission = await fetchFromAPI(`/api/permissions/role?docId=${docId}`)
+                if (permission) {
+                    // Supabase returns services, nav, security, account, dashboard as JSON strings or objects
+                    // Parse if strings, otherwise use as-is
+                    const parseField = (field: any) => {
+                        if (typeof field === 'string') {
+                            try {
+                                return JSON.parse(field)
+                            } catch {
+                                return {}
+                            }
+                        }
+                        return field || {}
                     }
-                    setPerms(merged)
-                    setSavedSnapshot(JSON.stringify(merged))
+                    
+                    const parsed: PermissionDoc = {
+                        services:  { ...DEFAULT_PERMISSIONS.services,  ...parseField(permission.services) },
+                        nav:       { ...DEFAULT_PERMISSIONS.nav,        ...parseField(permission.nav) },
+                        security:  { ...DEFAULT_PERMISSIONS.security,   ...parseField(permission.security) },
+                        account:   { ...DEFAULT_PERMISSIONS.account,    ...parseField(permission.account) },
+                        dashboard: { ...DEFAULT_PERMISSIONS.dashboard,  ...parseField(permission.dashboard) },
+                    }
+                    setPerms(parsed)
+                    setSavedSnapshot(JSON.stringify(parsed))
                 } else {
+                    // Permission doesn't exist yet, use defaults
                     setPerms(DEFAULT_PERMISSIONS)
                     setSavedSnapshot(JSON.stringify(DEFAULT_PERMISSIONS))
                 }
             } catch (e) {
-                console.error("Load permissions error:", e)
-                toast.error("Failed to load permissions.")
+                // 404 is expected if permission hasn't been created yet
+                if (e instanceof Error && e.message.includes('404')) {
+                    setPerms(DEFAULT_PERMISSIONS)
+                    setSavedSnapshot(JSON.stringify(DEFAULT_PERMISSIONS))
+                } else {
+                    console.error("Load permissions error:", e)
+                    toast.error("Failed to load permissions.")
+                    setPerms(DEFAULT_PERMISSIONS)
+                    setSavedSnapshot(JSON.stringify(DEFAULT_PERMISSIONS))
+                }
             } finally {
                 setIsLoading(false)
             }
@@ -817,19 +982,56 @@ export default function PermissionsPage() {
         }))
     }
 
-    /* ── Save to Firestore ── */
+    /* ── Save to Supabase via API ── */
     const handleSave = async () => {
         setIsSaving(true)
         const docId  = makeDocId(selectedDept, selectedRole)
-        const docRef = doc(db, "role_permissions", docId)
         try {
-            await setDoc(docRef, {
-                ...perms,
-                updatedAt: new Date().toISOString(),
-                updatedBy: userId,
-            }, { merge: true })
+            await fetchFromAPI('/api/permissions/role', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    doc_id: docId,
+                    department: selectedDept,
+                    role: selectedRole,
+                    services: perms.services,
+                    nav: perms.nav,
+                    security: perms.security,
+                    account: perms.account,
+                    dashboard: perms.dashboard,
+                    updated_by: userId,
+                    updated_at: new Date().toISOString(),
+                })
+            })
             setSavedSnapshot(JSON.stringify(perms))
             setIsDirty(false)
+            // Refresh all configs
+            const permissions = await fetchFromAPI('/api/permissions/role')
+            const map: Record<string, PermissionDoc> = {}
+            permissions.forEach((p: any) => {
+                const docId = String(p.doc_id || '')
+                
+                // Parse JSON fields from Supabase
+                const parseField = (field: any) => {
+                    if (typeof field === 'string') {
+                        try {
+                            return JSON.parse(field)
+                        } catch {
+                            return {}
+                        }
+                    }
+                    return field || {}
+                }
+                
+                map[docId] = {
+                    services: parseField(p.services),
+                    nav: parseField(p.nav),
+                    security: parseField(p.security),
+                    account: parseField(p.account),
+                    dashboard: parseField(p.dashboard),
+                }
+            })
+            setAllConfigs(map)
             toast.success(`Permissions saved for ${selectedDept} · ${selectedRole}`)
         } catch (e) {
             console.error("Save permissions error:", e)
@@ -863,19 +1065,64 @@ export default function PermissionsPage() {
     const handleAddDepartment = async (name: string) => {
         if (!name.trim()) return
         const deptName = name.trim()
-        const docRef = doc(db, "department_configs", deptName.toUpperCase())
-        await setDoc(docRef, {
-            name: deptName,
-            roles: DEFAULT_ROLES,
-            color: "blue"
-        })
-        toast.success(`Department "${deptName}" added!`)
+        try {
+            await fetchFromAPI('/api/permissions/departments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: deptName,
+                    roles: DEFAULT_ROLES,
+                    color: "blue"
+                })
+            })
+            toast.success(`Department "${deptName}" added!`)
+            // Refresh departments
+            const configs = await fetchFromAPI('/api/permissions/departments')
+            const deptList: DepartmentConfig[] = []
+            configs.forEach((c: any) => {
+                if (c.name && Array.isArray(c.roles) && !c.deleted) {
+                    deptList.push({
+                        name: c.name,
+                        roles: c.roles,
+                        color: c.color
+                    })
+                }
+            })
+            setDepartments(deptList)
+        } catch (error) {
+            console.error("Failed to add department:", error)
+            toast.error("Failed to add department")
+        }
     }
 
     const handleUpdateDepartmentRoles = async (deptName: string, roles: string[]) => {
-        const docRef = doc(db, "department_configs", deptName.toUpperCase())
-        await setDoc(docRef, { roles }, { merge: true })
-        toast.success(`Roles updated for ${deptName}!`)
+        try {
+            await fetchFromAPI('/api/permissions/departments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: deptName,
+                    roles: roles
+                })
+            })
+            toast.success(`Roles updated for ${deptName}!`)
+            // Refresh departments
+            const configs = await fetchFromAPI('/api/permissions/departments')
+            const deptList: DepartmentConfig[] = []
+            configs.forEach((c: any) => {
+                if (c.name && Array.isArray(c.roles) && !c.deleted) {
+                    deptList.push({
+                        name: c.name,
+                        roles: c.roles,
+                        color: c.color
+                    })
+                }
+            })
+            setDepartments(deptList)
+        } catch (error) {
+            console.error("Failed to update department roles:", error)
+            toast.error("Failed to update department roles")
+        }
     }
 
     const handleDeleteDepartment = async (deptName: string) => {
@@ -883,15 +1130,21 @@ export default function PermissionsPage() {
             toast.error("You need at least one department!")
             return
         }
-        const docRef = doc(db, "department_configs", deptName.toUpperCase())
-        await setDoc(docRef, { deleted: true }, { merge: true })
-        // Remove from local state first
-        const newDepts = departments.filter(d => d.name !== deptName)
-        setDepartments(newDepts)
-        if (selectedDept === deptName) {
-            setSelectedDept(newDepts[0].name)
+        try {
+            await fetchFromAPI(`/api/permissions/departments?name=${deptName}`, {
+                method: 'DELETE'
+            })
+            // Remove from local state first
+            const newDepts = departments.filter(d => d.name !== deptName)
+            setDepartments(newDepts)
+            if (selectedDept === deptName) {
+                setSelectedDept(newDepts[0].name)
+            }
+            toast.success(`Department "${deptName}" deleted!`)
+        } catch (error) {
+            console.error("Failed to delete department:", error)
+            toast.error("Failed to delete department")
         }
-        toast.success(`Department "${deptName}" deleted!`)
     }
     const enabledTotal = React.useMemo(() => {
         return SECTIONS.reduce((sum, section) => sum + Object.values((perms as any)[section.key] || {}).filter(Boolean).length, 0)

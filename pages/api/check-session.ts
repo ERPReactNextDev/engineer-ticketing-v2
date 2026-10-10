@@ -18,6 +18,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     if (!user) return res.status(401).json({ error: "User not found" });
 
+    // ✅ Check if user is Resigned or Terminated - immediately invalidate session
+    if (["Resigned", "Terminated"].includes(user.Status)) {
+      return res.status(401).json({ 
+        error: `Account is ${user.Status}. Session terminated.`,
+        status: user.Status,
+        forceLogout: true
+      });
+    }
+
     // ✅ If it's a delegated session from Taskflow, we allow the device mismatch
     const isDelegated = !!req.headers["x-delegated-user-id"];
     

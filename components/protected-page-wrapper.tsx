@@ -6,12 +6,41 @@ import { ShieldCheck, Loader2, XCircle } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 
-// --- FIREBASE IMPORTS ---
-import { db } from "@/lib/firebase";
-import { doc, getDoc } from "firebase/firestore";
+// Helper to make API calls
+const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
+  const API_BASE = process.env.NODE_ENV === 'production'
+    ? 'https://engineer-ticketing-v2.vercel.app'
+    : 'http://localhost:3000'
+  const res = await fetch(`${API_BASE}${endpoint}`, options)
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}
 
 // Global variable para hindi pabalik-balik ang loading screen sa iisang session
 let hasBeenVerifiedThisSession = false;
+
+// Mapping of routes to required service permissions
+const ROUTE_SERVICE_MAP: Record<string, string> = {
+  "/appointments/site-visit": "siteVisit",
+  "/request/dialux": "dialux",
+  "/request/job": "jobRequest",
+  "/request/other": "others",
+  "/request/product": "productRequest",
+  "/request/shop-drawing": "shopDrawing",
+  "/request/testing": "testing",
+  "/appointments/meeting-rooms": "meetingRoom",
+  "/appointments/protocols": "recommendation",
+};
+
+// Helper to get required service from path
+function getRequiredService(pathname: string): string | null {
+  for (const [route, service] of Object.entries(ROUTE_SERVICE_MAP)) {
+    if (pathname.startsWith(route)) {
+      return service;
+    }
+  }
+  return null;
+}
 
 function ProtectedContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -38,6 +67,7 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
         const deviceId = localStorage.getItem("deviceId") || "";
         const userIdFromStorage = localStorage.getItem("userId");
         const userDept = localStorage.getItem("department")?.toUpperCase() || "";
+        const userRole = localStorage.getItem("engiconnect_role")?.toUpperCase() || localStorage.getItem("userRole")?.toUpperCase() || "";
         const delegatedUserId = searchParams ? searchParams.get("userId") : null;
 
         const finalUserId = delegatedUserId || userIdFromStorage;
@@ -61,50 +91,88 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
           headers
         });
 
-        // Kung invalid ang session, kick out sa login
+        // Kung invalid ang session, check if may credentials sa localStorage
         if (res.status !== 200) {
-          router.push("/login");
-          return;
+          const data = await res.json();
+          
+          // If forceLogout is true (Resigned/Terminated), clear session and redirect
+          if (data.forceLogout) {
+            await fetch(`${API_BASE}/api/logout`, { method: "POST" });
+            localStorage.clear();
+            router.push("/login");
+            return;
+          }
+          
+          // Kung may userId sa localStorage pero session check failed,
+          // baka device mismatch lang, pero allow pa rin (fail-safe)
+          if (userIdFromStorage && userIdFromStorage !== "null") {
+            console.log("Session check failed but userId exists in localStorage, allowing access");
+            // Continue with permission checks
+          } else {
+            // Walang credentials, redirect to login
+            router.push("/login");
+            return;
+          }
         }
 
-        // 2. ROLE & BYPASS LOGIC (FIRESTORE)
+        // 2. ROLE & BYPASS LOGIC (SUPABASE)
         // Kung IT o PROCUREMENT ang department, bypass na ang checking ng Role
         if (userDept !== "IT" && userDept !== "PROCUREMENT" && finalUserId) {
-          const userDoc = await getDoc(doc(db, "users", finalUserId));
+          try {
+            const permissionCheck = await fetchFromAPI(`/api/permissions/check?userId=${finalUserId}`)
+            const { isDashboardAllowed, bypass, forceLogout } = permissionCheck
 
-          if (userDoc.exists()) {
-            const userData = userDoc.data();
-            const userRole = userData.Role?.toUpperCase() || "GUEST";
-
-            // Check role_permissions collection for isDashboardAllowed
-            const rolePermissionId = `${userDept}_${userRole}`;
-            const rolePermissionDoc = await getDoc(doc(db, "role_permissions", rolePermissionId));
-
-            if (rolePermissionDoc.exists()) {
-              const roleData = rolePermissionDoc.data();
-              const isDashboardAllowed = roleData.isDashboardAllowed;
-
-              // If isDashboardAllowed is false, deny access
-              if (isDashboardAllowed === false && pathname.startsWith("/dashboard")) {
-                setAccessDenied(true);
-                setLoading(false);
-                clearInterval(progressInterval);
-                return;
-              }
-            } else {
-              // If no role_permissions doc found, default to checking if role is GUEST
-              if (userRole === "GUEST" && pathname.startsWith("/dashboard")) {
-                setAccessDenied(true);
-                setLoading(false);
-                clearInterval(progressInterval);
-                return;
-              }
+            // If forceLogout is true (Resigned/Terminated), clear session and redirect
+            if (forceLogout) {
+              await fetch(`${API_BASE}/api/logout`, { method: "POST" });
+              localStorage.clear();
+              router.push("/login");
+              return;
             }
-          } else {
-            // Kung wala sa Firestore at HINDI IT/PROCUREMENT, allow access
-            // since Supabase validation already passed via check-session
-            // The check-session API already validated the user from Supabase
+
+            // If bypass is true (IT/PROCUREMENT), allow access
+            if (bypass) {
+              // Continue to allow access
+            } else if (isDashboardAllowed === false && pathname.startsWith("/dashboard")) {
+              // If isDashboardAllowed is false, deny access
+              setAccessDenied(true);
+              setLoading(false);
+              clearInterval(progressInterval);
+              return;
+            }
+          } catch (error) {
+            console.error("Permission check error:", error);
+            // On error, allow access (fail-safe)
           }
+        }
+
+        // 3. CHECK SERVICE PERMISSIONS (NEW)
+        // For appointments and requests, check if user has service enabled
+        const requiredService = getRequiredService(pathname)
+        if (requiredService && userDept !== "IT" && userDept !== "PROCUREMENT") {
+          try {
+            const permissionCheck = await fetchFromAPI(`/api/permissions/check?userId=${finalUserId}`)
+            const { services } = permissionCheck
+            
+            if (services && !services[requiredService]) {
+              // User doesn't have permission for this service
+              setAccessDenied(true);
+              setLoading(false);
+              clearInterval(progressInterval);
+              return;
+            }
+          } catch (error) {
+            console.warn("Service permission check error:", error);
+            // On error, allow access (fail-safe)
+          }
+        }
+
+        // 3. RESTRICT /admin/permissions TO SUPER ADMIN ONLY
+        if (pathname === "/admin/permissions" && userRole !== "SUPER ADMIN") {
+          setAccessDenied(true);
+          setLoading(false);
+          clearInterval(progressInterval);
+          return;
         }
 
         // Sync userId kung galing sa URL
@@ -129,6 +197,22 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
 
   // SCREEN 1: ACCESS DENIED UI
   if (accessDenied) {
+    const isPermissionsPage = pathname === "/admin/permissions"
+    const isDeniedByService = pathname.includes("/appointments/") || pathname.includes("/request/")
+    
+    // Check if user is logged in (has userId in localStorage)
+    const userId = localStorage.getItem("userId")
+    const isLoggedIn = userId && userId !== "null"
+    
+    // If logged in, go to dashboard with their ID; otherwise go to home
+    const handleReturnHome = () => {
+      if (isLoggedIn) {
+        router.push(`/dashboard?id=${userId}`)
+      } else {
+        router.push("/")
+      }
+    }
+    
     return (
       <div className="min-h-screen w-full bg-white flex flex-col items-center justify-center p-6 text-center font-sans">
         <div className="size-24 bg-red-50 rounded-[2.5rem] flex items-center justify-center mb-8 relative">
@@ -138,12 +222,17 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
         <div className="space-y-2">
           <h2 className="text-2xl font-black text-zinc-900 uppercase tracking-tighter">Access Restricted</h2>
           <p className="max-w-[300px] text-zinc-500 text-sm font-medium leading-relaxed">
-            Your current role does not have permission to access the Dashboard portal. Please contact IT for authorization.
+            {isPermissionsPage
+              ? "Only SUPER ADMIN users can access the Permissions Management page. Please contact IT for authorization."
+              : isDeniedByService
+              ? "Your role does not have permission to access this feature. Please contact your manager or IT for authorization."
+              : "Your current role does not have permission to access the Dashboard portal. Please contact IT for authorization."
+            }
           </p>
         </div>
         <div className="flex flex-col gap-3 mt-10 w-full max-w-[240px]">
           <Button
-            onClick={() => router.push("/")}
+            onClick={handleReturnHome}
             className="rounded-2xl h-14 bg-black text-white font-bold hover:scale-[1.02] transition-transform"
           >
             Return Home
