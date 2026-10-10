@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 // Helper to make API calls to Supabase via API routes
 const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
   const API_BASE = process.env.NODE_ENV === 'production'
-    ? 'https://engineer-ticketing-v2.vercel.app'
+    ? (typeof window !== 'undefined' ? window.location.origin : 'https://conx.devtech-erp-solutions.cloud')
     : 'http://localhost:3000'
   const res = await fetch(`${API_BASE}${endpoint}`, options)
   if (!res.ok) throw new Error(`API error: ${res.status}`)
@@ -1408,7 +1408,13 @@ export default function EngiconnectDashboard() {
                                 <div className="size-9 rounded-xl overflow-hidden bg-zinc-900 flex-shrink-0 ring-2 ring-gray-100">
                                     {userDetails.profilePicture ? <img src={userDetails.profilePicture} alt="Profile" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-white font-black text-[11px]">{userDetails.Firstname ? userDetails.Firstname.substring(0, 2).toUpperCase() : "EN"}</div>}
                                 </div>
-                                <div><p className="text-[9px] font-black text-gray-400 uppercase tracking-widest leading-none">{getGreeting()}</p><div className="flex items-center gap-2 mt-0.5"><h2 className="text-[15px] font-black text-gray-900 tracking-tight leading-none">{userDetails.Firstname || "User"}</h2>{userDetails.Department && <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 uppercase tracking-wide">{userDetails.Department}</span>}</div></div>
+                                <div className="min-w-0">
+                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest leading-none mb-0.5">{getGreeting()}</p>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <h2 className="text-[15px] font-black text-gray-900 tracking-tight leading-none truncate">{userDetails.Firstname || "User"}</h2>
+                                        {userDetails.Department && <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 uppercase tracking-wide flex-shrink-0">{userDetails.Department}</span>}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div className="flex items-center gap-2">

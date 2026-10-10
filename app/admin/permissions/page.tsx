@@ -17,7 +17,7 @@ import { doc, getDoc, setDoc, onSnapshot, collection } from "firebase/firestore"
 // Helper to make API calls to Supabase via API routes
 const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
   const API_BASE = process.env.NODE_ENV === 'production'
-    ? 'https://engineer-ticketing-v2.vercel.app'
+    ? (typeof window !== 'undefined' ? window.location.origin : 'https://conx.devtech-erp-solutions.cloud')
     : 'http://localhost:3000'
   
   // Add userId to headers if available

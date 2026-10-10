@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 // Helper to make API calls
 const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
   const API_BASE = process.env.NODE_ENV === 'production'
-    ? 'https://engineer-ticketing-v2.vercel.app'
+    ? (typeof window !== 'undefined' ? window.location.origin : 'https://conx.devtech-erp-solutions.cloud')
     : 'http://localhost:3000'
   const res = await fetch(`${API_BASE}${endpoint}`, options)
   if (!res.ok) throw new Error(`API error: ${res.status}`)
@@ -79,9 +79,7 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
 
         const API_BASE = isLocal
           ? "http://localhost:3000"
-          : isVercel
-            ? "https://engineer-ticketing-v2.vercel.app"
-            : "https://conx.devtech-erp-solutions.cloud";
+          : window.location.origin;
 
         const headers: HeadersInit = { "x-device-id": deviceId };
         if (finalUserId) headers["x-delegated-user-id"] = finalUserId;
