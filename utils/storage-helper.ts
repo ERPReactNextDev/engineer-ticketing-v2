@@ -8,8 +8,10 @@ const STORAGE_PREFIX = "conx_";
 
 /**
  * Check if the current window is running inside an iframe
+ * Returns false during SSR (window not available)
  */
 export const isInIframe = (): boolean => {
+  if (typeof window === "undefined") return false;
   try {
     return window.self !== window.top;
   } catch (e) {
@@ -26,24 +28,29 @@ const getPrefixedKey = (key: string): string => {
 
 /**
  * localStorage wrapper that handles iframe isolation
+ * Returns null/does nothing during SSR
  */
 export const conxStorage = {
   getItem: (key: string): string | null => {
+    if (typeof window === "undefined") return null;
     const prefixedKey = getPrefixedKey(key);
     return localStorage.getItem(prefixedKey);
   },
 
   setItem: (key: string, value: string): void => {
+    if (typeof window === "undefined") return;
     const prefixedKey = getPrefixedKey(key);
     localStorage.setItem(prefixedKey, value);
   },
 
   removeItem: (key: string): void => {
+    if (typeof window === "undefined") return;
     const prefixedKey = getPrefixedKey(key);
     localStorage.removeItem(prefixedKey);
   },
 
   clear: (): void => {
+    if (typeof window === "undefined") return;
     // Only clear CONX-prefixed keys when in iframe
     if (isInIframe()) {
       const keysToRemove: string[] = [];
@@ -61,6 +68,7 @@ export const conxStorage = {
 
   // Check if a key exists
   hasItem: (key: string): boolean => {
+    if (typeof window === "undefined") return false;
     const prefixedKey = getPrefixedKey(key);
     return localStorage.getItem(prefixedKey) !== null;
   },
@@ -71,6 +79,7 @@ export const conxStorage = {
  * Call this once on app initialization when in iframe
  */
 export const migrateToPrefixedStorage = (): void => {
+  if (typeof window === "undefined") return;
   if (!isInIframe()) return;
 
   const keysToMigrate = [
