@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { usePathname } from "next/navigation"
+import { usePathname, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import {
   Sidebar, SidebarContent, SidebarFooter,
@@ -13,6 +13,7 @@ import { NavUser }      from "./nav-user"
 
 import { db } from "@/lib/firebase"
 import { collection, onSnapshot, doc, getDoc, getDocs, query } from "firebase/firestore"
+import { conxStorage } from "@/utils/storage-helper"
 
 // Helper to make API calls to Supabase via API routes
 const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
@@ -126,6 +127,7 @@ function SidebarSkeleton() {
 ───────────────────────────────────────────────────────── */
 export function AppSidebar({ userId, ...props }: AppSidebarProps) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
 
   const [isLoading, setIsLoading]     = React.useState(true)
   const [permsLoaded, setPermsLoaded] = React.useState(false)
@@ -137,7 +139,11 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
 
   /* ── 1. Fetch user profile ── */
   React.useEffect(() => {
-    if (!userId) {
+    // Check URL parameter first (from TaskFlow iframe), then use prop
+    const urlUserId = searchParams?.get("userId")
+    const finalUserId = urlUserId || userId
+
+    if (!finalUserId) {
       setIsLoading(false)
       setPermsLoaded(true)
       return
@@ -145,7 +151,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
     const run = async () => {
       try {
         // Fetch MongoDB data
-        const mongoRes = await fetch(`/api/user?id=${encodeURIComponent(userId)}`)
+        const mongoRes = await fetch(`/api/user?id=${encodeURIComponent(finalUserId)}`)
         const mongoData = await mongoRes.json()
 
         const dept = (mongoData.Department || "").toUpperCase()
@@ -154,7 +160,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
         // Get role from Supabase engiconnect_role field (primary) or fallback to Role
         let engiconnectRole = "MEMBER"
         try {
-          const supabaseRes = await fetch(`/api/user?id=${encodeURIComponent(userId)}`)
+          const supabaseRes = await fetch(`/api/user?id=${encodeURIComponent(finalUserId)}`)
           const supabaseData = await supabaseRes.json()
           if (supabaseData) {
             engiconnectRole = (supabaseData.engiconnect_role || supabaseData.Role || "MEMBER").toUpperCase()
@@ -201,10 +207,10 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
         // Update localStorage for consistency with other components
         // Use full role name for permissions lookup (e.g., "TERRITORY SALES MANAGER" not "TSM")
         if (typeof window !== "undefined") {
-          localStorage.setItem("engiconnect_role", displayRole)
-          localStorage.setItem("userRole", displayRole)
-          localStorage.setItem("userDepartment", dept)
-          localStorage.setItem("userRoleShort", logicRole) // Keep abbreviated for logic checks
+          conxStorage.setItem("engiconnect_role", displayRole)
+          conxStorage.setItem("userRole", displayRole)
+          conxStorage.setItem("userDepartment", dept)
+          conxStorage.setItem("userRoleShort", logicRole) // Keep abbreviated for logic checks
         }
         
         setUserDetails({
@@ -223,7 +229,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
       }
     }
     run()
-  }, [userId])
+  }, [userId, searchParams])
 
   /* ── 2. Fetch role_permissions from Supabase via API ── */
   React.useEffect(() => {
@@ -281,7 +287,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
 
     const checkUserStatus = async () => {
       try {
-        const deviceId = localStorage.getItem("deviceId") || ""
+        const deviceId = conxStorage.getItem("deviceId") || ""
         const API_BASE = process.env.NODE_ENV === 'production'
           ? (typeof window !== 'undefined' ? window.location.origin : 'https://conx.devtech-erp-solutions.cloud')
           : 'http://localhost:3000'
@@ -293,11 +299,11 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
 
         if (res.status !== 200) {
           const data = await res.json()
-          
+
           // If forceLogout is true (Resigned/Terminated), clear session and redirect
           if (data.forceLogout) {
             await fetch(`${API_BASE}/api/logout`, { method: "POST" })
-            localStorage.clear()
+            conxStorage.clear()
             window.location.href = "/login"
           }
         }

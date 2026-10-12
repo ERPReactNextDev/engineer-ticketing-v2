@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useEffect, useState, useRef, useMemo } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
 import {
     SidebarInset,
@@ -24,6 +24,7 @@ import {
 import { db } from "@/lib/firebase";
 import { collection, query, where, onSnapshot, limit, orderBy, doc, getDoc, getDocs } from "firebase/firestore";
 import { cn } from "@/lib/utils";
+import { conxStorage } from "@/utils/storage-helper";
 
 // Helper to make API calls to Supabase via API routes
 const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
@@ -972,10 +973,11 @@ function DepartmentPulse({ userDept, myTasks }: { userDept: string | null; myTas
 
 export default function EngiconnectDashboard() {
     const router = useRouter()
+    const searchParams = useSearchParams()
     const [userId, setUserId] = useState<string | null>(null)
     const [userRole, setUserRole] = useState<string | null>(() => {
         if (typeof window !== "undefined") {
-            return (localStorage.getItem("userRole") || "").toUpperCase() || null
+            return (conxStorage.getItem("userRole") || "").toUpperCase() || null
         }
         return null
     })
@@ -992,7 +994,7 @@ export default function EngiconnectDashboard() {
     const [userDept, setUserDept] = useState<string | null>(() => {
         // Initialize from localStorage immediately to avoid null flash
         if (typeof window !== "undefined") {
-            return (localStorage.getItem("userDepartment") || "").toUpperCase() || null
+            return (conxStorage.getItem("userDepartment") || "").toUpperCase() || null
         }
         return null
     })
@@ -1021,15 +1023,25 @@ export default function EngiconnectDashboard() {
     const [perms, setPerms] = useState<any>(null)
 
     useEffect(() => {
-        const storedUserId = localStorage.getItem("userId")
-        if (!storedUserId) { setIsDataLoading(false); return }
-        setUserId(storedUserId)
-        fetch(`/api/user?id=${encodeURIComponent(storedUserId)}`)
+        // Check URL parameter first (from TaskFlow iframe), then localStorage
+        const urlUserId = searchParams?.get("userId")
+        const storedUserId = conxStorage.getItem("userId")
+        const finalUserId = urlUserId || storedUserId
+
+        if (!finalUserId) { setIsDataLoading(false); return }
+
+        // If userId came from URL, store it for future use
+        if (urlUserId && urlUserId !== storedUserId) {
+            conxStorage.setItem("userId", urlUserId)
+        }
+
+        setUserId(finalUserId)
+        fetch(`/api/user?id=${encodeURIComponent(finalUserId)}`)
             .then(res => res.json())
             .then(async mongoData => {
                 const dept = mongoData.Department || mongoData.department || ""
                 const position = (mongoData.Position || "").toUpperCase()
-                const userDoc = await getDoc(doc(db, "users", storedUserId))
+                const userDoc = await getDoc(doc(db, "users", finalUserId))
                 const firestoreRole = (userDoc.exists() ? (userDoc.data().Role || userDoc.data().role || "MEMBER") : "MEMBER").toUpperCase()
                 const primaryRole = (mongoData.engiconnect_role || mongoData.Role || firestoreRole).toUpperCase().trim()
                 const isSalesDept = dept === "SALES"
@@ -1047,7 +1059,7 @@ export default function EngiconnectDashboard() {
                 const deptUpper = (dept || "").toUpperCase()
                 if (deptUpper === "ADMIN") setActiveTab("Overview")
                 else if (deptUpper === "PROCUREMENT" || deptUpper === "WAREHOUSE OPERATIONS") setActiveTab("Product Requests")
-                localStorage.setItem("userDepartment", dept); localStorage.setItem("engiconnect_role", permissionRole); localStorage.setItem("userRole", finalRole); localStorage.setItem("userName", mongoData.Firstname || "User")
+                conxStorage.setItem("userDepartment", dept); conxStorage.setItem("engiconnect_role", permissionRole); conxStorage.setItem("userRole", finalRole); conxStorage.setItem("userName", mongoData.Firstname || "User")
                 const permissionId = `${(dept || "").toUpperCase().trim()}_${permissionRole.toUpperCase().trim()}`
                 try {
                     const permission = await fetchFromAPI(`/api/permissions/role?docId=${encodeURIComponent(permissionId)}`)
@@ -1093,7 +1105,7 @@ export default function EngiconnectDashboard() {
             }).catch(error => {
                 console.error("Failed to load dashboard user:", error)
             }).finally(() => setIsDataLoading(false))
-    }, [])
+    }, [searchParams])
 
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -1121,8 +1133,8 @@ export default function EngiconnectDashboard() {
 
     useEffect(() => {
         if (!db || !userId) return
-        const userRole = localStorage.getItem("userRole")?.toUpperCase() || "MEMBER"
-        const userDept = localStorage.getItem("userDepartment")?.toUpperCase() || ""
+        const userRole = conxStorage.getItem("userRole")?.toUpperCase() || "MEMBER"
+        const userDept = conxStorage.getItem("userDepartment")?.toUpperCase() || ""
         const isManager = userRole === "MANAGER" || userRole === "SALES HEAD" || userRole === "SUPER ADMIN"
         const isTSM = userRole === "TSM" || userRole === "TERRITORY SALES MANAGER"
         const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || isManager || userRole === "LEADER"

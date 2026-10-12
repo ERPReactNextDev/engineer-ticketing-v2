@@ -20,6 +20,7 @@ import { v4 as uuidv4 } from "uuid";
 import { addDoc, collection, serverTimestamp, doc, getDoc } from "firebase/firestore";
 import { db, logsDb } from "@/lib/firebase";
 import { supabase } from "@/utils/supabase-ticket";
+import { conxStorage, migrateToPrefixedStorage } from "@/utils/storage-helper";
 
 export const dynamic = "force-dynamic";
 
@@ -131,10 +132,15 @@ export default function LoginForm({ className, ...props }: React.ComponentProps<
 
   const router = useRouter()
 
+  // Migrate storage to prefixed keys if in iframe
+  useEffect(() => {
+    migrateToPrefixedStorage()
+  }, [])
+
   const getDeviceId = useCallback(() => {
     if (typeof window === "undefined") return ""
-    let id = localStorage.getItem("deviceId")
-    if (!id) { id = uuidv4(); localStorage.setItem("deviceId", id) }
+    let id = conxStorage.getItem("deviceId")
+    if (!id) { id = uuidv4(); conxStorage.setItem("deviceId", id) }
     return id
   }, [])
 
@@ -187,12 +193,12 @@ export default function LoginForm({ className, ...props }: React.ComponentProps<
         userDept = supabaseUser.Department?.toUpperCase() || userDept
       }
 
-      localStorage.setItem("userId", result.userId)
-      localStorage.setItem("userName", displayName)
-      localStorage.setItem("engiconnect_role", engiconnectRole)
-      localStorage.setItem("userRole", engiconnectRole) // Keep for backward compatibility
-      localStorage.setItem("userDepartment", userDept)
-      localStorage.setItem("department", userDept)
+      conxStorage.setItem("userId", result.userId)
+      conxStorage.setItem("userName", displayName)
+      conxStorage.setItem("engiconnect_role", engiconnectRole)
+      conxStorage.setItem("userRole", engiconnectRole) // Keep for backward compatibility
+      conxStorage.setItem("userDepartment", userDept)
+      conxStorage.setItem("department", userDept)
 
       await addDoc(collection(logsDb, "activity_logs"), {
         email: loginEmail || result.Email || "System User",
@@ -255,7 +261,7 @@ export default function LoginForm({ className, ...props }: React.ComponentProps<
     const deviceId = getDeviceId()
 
     // Read PIN from scoped key if userId is known, fallback to unscoped
-    const storedUserId = localStorage.getItem("userId")
+    const storedUserId = conxStorage.getItem("userId")
     const savedPin = storedUserId
       ? localStorage.getItem(scopedPinKey(storedUserId))
       : null
@@ -312,7 +318,7 @@ export default function LoginForm({ className, ...props }: React.ComponentProps<
     if (credKeys.length === 0) { setBioState("not_registered"); return }
 
     // Also check if the last logged-in user has bio enabled
-    const lastUid = localStorage.getItem("userId")
+    const lastUid = conxStorage.getItem("userId")
     if (lastUid) {
       const bioEnabled = localStorage.getItem(scopedBioKey(lastUid)) === "true"
       const hasCred    = !!localStorage.getItem(scopedCredKey(lastUid))

@@ -18,6 +18,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Progress } from "@/components/ui/progress"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { conxStorage } from "@/utils/storage-helper"
 
 interface NavUserProps {
   user: {
@@ -38,12 +39,12 @@ interface NavUserProps {
 function clearSession(userId?: string) {
   sessionStorage.clear()
 
-  // Identity
-  localStorage.removeItem("userId")
-  localStorage.removeItem("userName")
-  localStorage.removeItem("userRole")
-  localStorage.removeItem("userDepartment")
-  localStorage.removeItem("department")    // legacy compat key
+  // Identity - use conxStorage to handle iframe isolation
+  conxStorage.removeItem("userId")
+  conxStorage.removeItem("userName")
+  conxStorage.removeItem("userRole")
+  conxStorage.removeItem("userDepartment")
+  conxStorage.removeItem("department")    // legacy compat key
 
   // Note: we intentionally keep:
   //   deviceId                                — device identification
