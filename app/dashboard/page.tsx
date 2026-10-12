@@ -974,6 +974,14 @@ function DepartmentPulse({ userDept, myTasks }: { userDept: string | null; myTas
 }
 
 export default function EngiconnectDashboard() {
+    return (
+        <React.Suspense fallback={<div className="min-h-screen bg-[#F2F4F7]" />}>
+            <EngiconnectDashboardContent />
+        </React.Suspense>
+    )
+}
+
+function EngiconnectDashboardContent() {
     const router = useRouter()
     const searchParams = useSearchParams()
     const [isMounted, setIsMounted] = useState(false)
