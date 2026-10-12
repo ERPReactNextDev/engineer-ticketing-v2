@@ -3,7 +3,7 @@ import {
   validateUser,
   fetchUserById,
   fetchUserByEmail,
-  fetchUserByDeviceId,
+  fetchUserByConxDeviceId,
   updateUser,
 } from "@/lib/ModuleGlobal/supabase";
 import { serialize } from "cookie";
@@ -44,9 +44,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Biometric was verified on-device by WebAuthn — trust it
       isVerified = true;
 
-      // Update DeviceId so PIN login still works on this device
+      // Update the ConX device ID so PIN login still works on this device
       await updateUser(userId, {
-        DeviceId: deviceId,
+        ConxDeviceId: deviceId,
         LastLoginAt: new Date().toISOString(),
         LoginAttempts: 0,
       });
@@ -61,7 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ message: "PIN and Device ID are required." });
       }
       if (pin === savedPin) isVerified = true;
-      user = await fetchUserByDeviceId(deviceId);
+      user = await fetchUserByConxDeviceId(deviceId);
     }
 
     /* ──────────────────────────────────────────
@@ -118,12 +118,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     /* ── Success ── */
-    // For password / PIN modes, update DeviceId and reset attempts
+    // For password / PIN modes, update the ConX device ID and reset attempts
     if (mode !== "biometric") {
       await updateUser(user.id, {
         LoginAttempts: 0,
         Status: "Active",
-        DeviceId: deviceId,
+        ConxDeviceId: deviceId,
         LastLoginAt: new Date().toISOString(),
       });
     }

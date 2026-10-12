@@ -148,6 +148,26 @@ export async function fetchUserByDeviceId(deviceId: string) {
   }
 }
 
+// Fetch user by the device ID scoped to the ConX application
+export async function fetchUserByConxDeviceId(deviceId: string) {
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('ConxDeviceId', deviceId)
+      .single();
+
+    if (error || !user) {
+      return null;
+    }
+
+    return user;
+  } catch (error) {
+    console.error('Fetch user by ConX device error:', error);
+    return null;
+  }
+}
+
 // Update user
 export async function updateUser(userId: string, updates: Record<string, any>) {
   try {

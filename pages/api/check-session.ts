@@ -30,7 +30,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ✅ If it's a delegated session from Taskflow, we allow the device mismatch
     const isDelegated = !!req.headers["x-delegated-user-id"];
     
-    if (!isDelegated && user.DeviceId !== deviceId) {
+    const conxDeviceId = Object.prototype.hasOwnProperty.call(user, "ConxDeviceId")
+      ? user.ConxDeviceId
+      : user.DeviceId;
+
+    if (!isDelegated && conxDeviceId !== deviceId) {
       return res.status(401).json({ error: "Device mismatch." });
     }
 
