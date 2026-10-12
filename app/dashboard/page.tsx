@@ -974,7 +974,13 @@ function DepartmentPulse({ userDept, myTasks }: { userDept: string | null; myTas
 export default function EngiconnectDashboard() {
     const router = useRouter()
     const searchParams = useSearchParams()
+    const [isMounted, setIsMounted] = useState(false)
     const [userId, setUserId] = useState<string | null>(null)
+
+    // Ensure we only access searchParams on client-side
+    useEffect(() => {
+        setIsMounted(true)
+    }, [])
     const [userRole, setUserRole] = useState<string | null>(() => {
         if (typeof window !== "undefined") {
             return (conxStorage.getItem("userRole") || "").toUpperCase() || null
@@ -1023,6 +1029,9 @@ export default function EngiconnectDashboard() {
     const [perms, setPerms] = useState<any>(null)
 
     useEffect(() => {
+        // Only run on client-side to avoid SSR issues
+        if (!isMounted) return
+
         // Check URL parameter first (from TaskFlow iframe), then localStorage
         const urlUserId = searchParams?.get("userId")
         const storedUserId = conxStorage.getItem("userId")
@@ -1105,7 +1114,7 @@ export default function EngiconnectDashboard() {
             }).catch(error => {
                 console.error("Failed to load dashboard user:", error)
             }).finally(() => setIsDataLoading(false))
-    }, [searchParams])
+    }, [isMounted, searchParams])
 
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 1000)

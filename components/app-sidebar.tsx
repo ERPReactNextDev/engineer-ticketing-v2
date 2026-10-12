@@ -128,6 +128,7 @@ function SidebarSkeleton() {
 export function AppSidebar({ userId, ...props }: AppSidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  const [isMounted, setIsMounted] = React.useState(false)
 
   const [isLoading, setIsLoading]     = React.useState(true)
   const [permsLoaded, setPermsLoaded] = React.useState(false)
@@ -137,8 +138,16 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
   })
   const [permDoc, setPermDoc] = React.useState<PermDoc>(DEFAULT_PERMS)
 
+  // Ensure we only access searchParams on client-side
+  React.useEffect(() => {
+    setIsMounted(true)
+  }, [])
+
   /* ── 1. Fetch user profile ── */
   React.useEffect(() => {
+    // Only run on client-side to avoid SSR issues
+    if (!isMounted) return
+
     // Check URL parameter first (from TaskFlow iframe), then use prop
     const urlUserId = searchParams?.get("userId")
     const finalUserId = urlUserId || userId
@@ -229,7 +238,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
       }
     }
     run()
-  }, [userId, searchParams])
+  }, [isMounted, userId, searchParams])
 
   /* ── 2. Fetch role_permissions from Supabase via API ── */
   React.useEffect(() => {
