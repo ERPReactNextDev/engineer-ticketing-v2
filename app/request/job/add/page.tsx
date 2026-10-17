@@ -55,7 +55,15 @@ import { db } from "@/lib/firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 
 // MapPicker component (client-side only for Leaflet)
-import MapPicker from "@/components/map-picker";
+import dynamicImport from "next/dynamic";
+const MapPicker = dynamicImport(() => import("@/components/map-picker"), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-full flex items-center justify-center bg-slate-100 rounded-xl">
+      <Loader2 className="size-6 animate-spin text-slate-400" />
+    </div>
+  ),
+});
 
 export default function JobRequestWizard() {
   const router = useRouter();
