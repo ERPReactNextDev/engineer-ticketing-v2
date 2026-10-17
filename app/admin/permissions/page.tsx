@@ -1047,6 +1047,28 @@ export default function PermissionsPage() {
         setIsDirty(false)
     }
 
+    const [dangerAction, setDangerAction] = React.useState<null | "defaults" | "disableAll">(null)
+
+    /* ── Danger zone: reset to defaults ── */
+    const handleResetToDefaults = () => {
+        setPerms(DEFAULT_PERMISSIONS)
+        setDangerAction(null)
+        toast.info("Reset to defaults. Click Save to apply.")
+    }
+
+    /* ── Danger zone: disable everything ── */
+    const handleDisableAll = () => {
+        const allOff = {} as PermissionDoc
+        SECTIONS.forEach(section => {
+            ;(allOff as any)[section.key] = Object.fromEntries(
+                section.items.map(i => [i.key, false])
+            )
+        })
+        setPerms(allOff)
+        setDangerAction(null)
+        toast.info("All permissions disabled. Click Save to apply.")
+    }
+
     /* ── Count enabled per section ── */
     const countEnabled = (section: string) =>
         Object.values((perms as any)[section] || {}).filter(Boolean).length
@@ -1445,6 +1467,38 @@ export default function PermissionsPage() {
                             </DialogContent>
                         </Dialog>
 
+                        {/* ── DANGER ZONE CONFIRM DIALOG ── */}
+                        <Dialog open={dangerAction !== null} onOpenChange={(o) => !o && setDangerAction(null)}>
+                            <DialogContent className="max-w-md rounded-[28px] border-none shadow-2xl p-0 bg-white">
+                                <div className="p-6 space-y-4">
+                                    <div className="flex items-center gap-3">
+                                        <div className="size-10 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                                            <ShieldAlert className="size-5" />
+                                        </div>
+                                        <DialogTitle className="text-[16px] font-black text-zinc-900">
+                                            {dangerAction === "defaults" ? "Reset to defaults?" : "Disable all permissions?"}
+                                        </DialogTitle>
+                                    </div>
+                                    <p className="text-[12px] font-medium text-zinc-500 leading-relaxed">
+                                        This will change the permissions for{" "}
+                                        <span className="font-black text-zinc-800">{selectedDept} · {selectedRole}</span>.
+                                        Nothing is saved until you click <span className="font-black">Save</span>, so you can still discard.
+                                    </p>
+                                    <div className="flex justify-end gap-2 pt-2">
+                                        <Button variant="outline" onClick={() => setDangerAction(null)} className="rounded-xl">
+                                            Cancel
+                                        </Button>
+                                        <Button
+                                            onClick={dangerAction === "defaults" ? handleResetToDefaults : handleDisableAll}
+                                            className="rounded-xl bg-rose-600 hover:bg-rose-700 text-white"
+                                        >
+                                            Yes, continue
+                                        </Button>
+                                    </div>
+                                </div>
+                            </DialogContent>
+                        </Dialog>
+
                         {/* ══════════════════════════════
                             CHOOSE WHO YOU'RE EDITING
                         ══════════════════════════════ */}
@@ -1574,6 +1628,60 @@ export default function PermissionsPage() {
                                         collapsedByDefault={allCollapsed}
                                     />
                                 ))}
+
+                                {/* ── DANGER ZONE ── */}
+                                <div className="bg-white rounded-[24px] border border-rose-200 shadow-sm overflow-hidden">
+                                    <div className="flex items-center gap-4 p-5 border-b border-rose-100 bg-rose-50/50">
+                                        <div className="p-2.5 rounded-2xl border bg-rose-50 text-rose-700 border-rose-200 flex-shrink-0">
+                                            <ShieldAlert className="size-4" />
+                                        </div>
+                                        <div className="min-w-0">
+                                            <h3 className="font-black text-[13px] uppercase tracking-tight text-rose-700">
+                                                Danger Zone
+                                            </h3>
+                                            <p className="text-[10px] text-rose-400 font-bold mt-1">
+                                                These actions affect all permissions for {selectedDept} · {selectedRole}.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="divide-y divide-zinc-100">
+                                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-5">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-[12px] font-black uppercase tracking-tight text-zinc-900">Reset to Defaults</p>
+                                                <p className="text-[10px] font-bold text-zinc-400 mt-0.5">
+                                                    Restore this role's permissions to the system default values.
+                                                </p>
+                                            </div>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => setDangerAction("defaults")}
+                                                disabled={isSaving}
+                                                className="rounded-xl text-[10px] font-black uppercase tracking-widest text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700"
+                                            >
+                                                <RotateCcw className="size-3 mr-1.5" /> Reset
+                                            </Button>
+                                        </div>
+
+                                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-5">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-[12px] font-black uppercase tracking-tight text-zinc-900">Disable All Permissions</p>
+                                                <p className="text-[10px] font-bold text-zinc-400 mt-0.5">
+                                                    Turn off every permission in every section for this role.
+                                                </p>
+                                            </div>
+                                            <Button
+                                                size="sm"
+                                                onClick={() => setDangerAction("disableAll")}
+                                                disabled={isSaving}
+                                                className="rounded-xl text-[10px] font-black uppercase tracking-widest bg-rose-600 hover:bg-rose-700 text-white"
+                                            >
+                                                <X className="size-3 mr-1.5" /> Disable All
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         )}
 

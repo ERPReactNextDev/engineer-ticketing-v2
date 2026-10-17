@@ -57,7 +57,7 @@ export default function NotificationsPage() {
         const unsubSite = onSnapshot(query(collection(db, "appointments"), where("status", "==", "PENDING")), 
             (snap) => setCounts(prev => ({ ...prev, siteVisit: snap.size })));
         
-        const unsubJob = onSnapshot(query(collection(db, "job_requests"), where("status", "==", "PENDING")), 
+        const unsubJob = onSnapshot(query(collection(db, "job_requests"), where("status", "==", "JR FORM FORWARD TO ENGINEERING")), 
             (snap) => setCounts(prev => ({ ...prev, jobRequest: snap.size })));
 
         const unsubShop = onSnapshot(query(collection(db, "shop_drawing_requests"), where("department", "==", "ENGINEERING"), where("status", "==", "PENDING_REVIEW")), 

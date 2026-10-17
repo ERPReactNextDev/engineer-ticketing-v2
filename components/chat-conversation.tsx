@@ -170,7 +170,7 @@ export default function ChatConversation({
   // FEATURE: SYSTEM MESSAGES (STATUS CHANGE)
   const prevStatus = useRef(status);
   useEffect(() => {
-    if (prevStatus.current !== status && status !== "PENDING" && requestId) {
+    if (prevStatus.current !== status && status !== "PENDING" && status !== "JR FORM FORWARD TO ENGINEERING" && requestId) {
       const injectSystemMessage = async () => {
         try {
           const docRef = doc(db, collectionName, requestId);

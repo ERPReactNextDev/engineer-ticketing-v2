@@ -377,7 +377,10 @@ export default function ProfilePage() {
                     <div className="p-2 bg-zinc-900 text-white rounded-[8px]"><PenTool className="size-4" /></div>
                     <h3 className="font-black text-[10px] uppercase tracking-widest">E-Signature</h3>
                   </div>
-                  <Button variant="ghost" size="sm" onClick={() => sigCanvas.current?.clear()} className="text-[9px] font-bold uppercase"><Eraser className="size-3 mr-1" /> Clear</Button>
+                  <div className="flex gap-2">
+                    <Button variant="ghost" size="sm" onClick={() => sigCanvas.current?.clear()} className="text-[9px] font-bold uppercase"><Eraser className="size-3 mr-1" /> Clear</Button>
+                    <Button variant="ghost" size="sm" onClick={() => document.getElementById("signature-upload")?.click()} className="text-[9px] font-bold uppercase"><Camera className="size-3 mr-1" /> Upload PNG</Button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
@@ -385,7 +388,7 @@ export default function ProfilePage() {
                     <div className="h-32 border border-dashed border-zinc-200 rounded-[12px] bg-zinc-50/50 relative">
                       <SignatureCanvas ref={sigCanvas} penColor="black" canvasProps={{ className: "w-full h-full cursor-crosshair" }} />
                     </div>
-                    <Button 
+                    <Button
                       onClick={() => {
                         const data = sigCanvas.current?.getTrimmedCanvas().toDataURL("image/png");
                         if (data) handleUpload(data, "signature");
@@ -394,6 +397,7 @@ export default function ProfilePage() {
                     >
                       Sync Signature
                     </Button>
+                    <input id="signature-upload" type="file" accept="image/png" className="hidden" onChange={(e) => e.target.files?.[0] && handleUpload(e.target.files[0], "signature")} />
                   </div>
 
                   {userDetails.signatureImage && (

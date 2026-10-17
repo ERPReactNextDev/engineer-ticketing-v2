@@ -102,12 +102,13 @@ export function CollaborationHub({
   // New States for Features
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [userNamesMap, setUserNamesMap] = useState<Record<string, { firstName: string; lastName: string; userName: string; profilePicture?: string; department?: string }>>({});
+  const [localMessages, setLocalMessages] = useState<Message[]>(messages);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const unreadRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isAtBottom = useRef(true);
-  const prevMessagesCount = useRef(messages.length);
+  const prevMessagesCount = useRef(localMessages.length);
   const prevStatus = useRef(status); // For System Messages detection
   const sentSound = useRef<HTMLAudioElement | null>(null);
   const receivedSound = useRef<HTMLAudioElement | null>(null);
@@ -136,9 +137,35 @@ export function CollaborationHub({
     };
   }, [chatMessage, effectiveDocId, currentUserId, userName]);
 
+  // FEATURE: REAL-TIME MESSAGE LISTENING
+  useEffect(() => {
+    const docRef = doc(dbCollab, collectionName, effectiveDocId);
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const fetchedMessages = data.messages || [];
+        setLocalMessages(fetchedMessages);
+      } else {
+        // Document doesn't exist yet, set empty messages
+        setLocalMessages([]);
+      }
+    }, (error) => {
+      console.error("Error listening to messages:", error);
+    });
+
+    return () => unsubscribe();
+  }, [effectiveDocId, collectionName]);
+
+  // Update localMessages when prop messages change (for initial load)
+  useEffect(() => {
+    if (messages.length > 0 && localMessages.length === 0) {
+      setLocalMessages(messages);
+    }
+  }, [messages]);
+
   // FEATURE: SYSTEM MESSAGES (STATUS CHANGE)
   useEffect(() => {
-    if (prevStatus.current !== status && status !== "PENDING") {
+    if (prevStatus.current !== status && status !== "PENDING" && status !== "JR FORM FORWARD TO ENGINEERING") {
       const injectSystemMessage = async () => {
         try {
           const docRef = doc(dbCollab, collectionName, effectiveDocId);
@@ -163,25 +190,25 @@ export function CollaborationHub({
 
   // FEATURE: MARK MESSAGES AS SEEN
   useEffect(() => {
-    if (isOpen && messages.length > 0) {
+    if (isOpen && localMessages.length > 0) {
       const markAsSeen = async () => {
-        const needsUpdate = messages.some(
-          msg => msg.senderId !== currentUserId && 
+        const needsUpdate = localMessages.some(
+          msg => msg.senderId !== currentUserId &&
                  !msg.seenBy?.includes(currentUserId) &&
                  canSeePrivateMessage(msg)
         );
 
         if (needsUpdate) {
           try {
-            const updatedMessages = messages.map(msg => {
-              if (msg.senderId !== currentUserId && 
+            const updatedMessages = localMessages.map(msg => {
+              if (msg.senderId !== currentUserId &&
                   !msg.seenBy?.includes(currentUserId) &&
                   canSeePrivateMessage(msg)) {
                 return { ...msg, seenBy: [...(msg.seenBy || []), currentUserId] };
               }
               return msg;
             });
-            const docRef = doc(dbCollab, collectionName, effectiveDocId); 
+            const docRef = doc(dbCollab, collectionName, effectiveDocId);
             await updateDoc(docRef, { messages: updatedMessages });
           } catch (e) {
             console.error("Failed to update seen status", e);
@@ -190,18 +217,18 @@ export function CollaborationHub({
       };
       markAsSeen();
     }
-  }, [isOpen, messages, currentUserId, effectiveDocId, collectionName, userDepartment]);
+  }, [isOpen, localMessages, currentUserId, effectiveDocId, collectionName, userDepartment]);
 
   // FEATURE: FETCH USER NAMES FOR SEEN BY - Only fetch missing users, use memoization
   useEffect(() => {
     const fetchUserNames = async () => {
       const allSeenByIds = new Set<string>();
-      messages.forEach(msg => {
+      localMessages.forEach(msg => {
         msg.seenBy?.forEach(id => allSeenByIds.add(id));
       });
 
       const idsToFetch = Array.from(allSeenByIds).filter(id => !userNamesMap[id]);
-      
+
       if (idsToFetch.length > 0) {
         try {
           const response = await fetch("/api/get-users-by-ids", {
@@ -209,7 +236,7 @@ export function CollaborationHub({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ userIds: idsToFetch })
           });
-          
+
           if (response.ok) {
             const data = await response.json();
             setUserNamesMap(prev => ({ ...prev, ...data.users }));
@@ -220,10 +247,10 @@ export function CollaborationHub({
       }
     };
 
-    if (messages.length > 0) {
+    if (localMessages.length > 0) {
       fetchUserNames();
     }
-  }, [messages]); // Only depend on messages, NOT userNamesMap
+  }, [localMessages]); // Only depend on localMessages, NOT userNamesMap
 
   const scrollToMessage = (msgId: string) => {
     const element = document.getElementById(`msg-${msgId}`);
@@ -239,17 +266,17 @@ export function CollaborationHub({
   };
 
   const unreadCount = useMemo(() => {
-    return messages.filter(msg => 
-      msg.senderId !== currentUserId && 
+    return localMessages.filter(msg =>
+      msg.senderId !== currentUserId &&
       !msg.seenBy?.includes(currentUserId)
     ).length;
-  }, [messages, currentUserId]);
+  }, [localMessages, currentUserId]);
 
   const firstUnreadIndex = useMemo(() => {
-    return messages.findIndex(msg =>
+    return localMessages.findIndex(msg =>
       msg.senderId !== currentUserId && !msg.seenBy?.includes(currentUserId)
     );
-  }, [messages, currentUserId]);
+  }, [localMessages, currentUserId]);
 
   // Function to check if user can see private messages
   const canSeePrivateMessage = (msg: Message) => {
@@ -268,10 +295,10 @@ export function CollaborationHub({
   };
 
   const filteredMessages = useMemo(() => {
-    const visibleMessages = messages.filter(canSeePrivateMessage);
+    const visibleMessages = localMessages.filter(canSeePrivateMessage);
     if (!searchQuery) return visibleMessages;
     return visibleMessages.filter(m => m.text?.toLowerCase().includes(searchQuery.toLowerCase()));
-  }, [messages, searchQuery, currentUserId, userDepartment]);
+  }, [localMessages, searchQuery, currentUserId, userDepartment]);
 
   // FEATURE: MENTION SUPPORT (RENDER LOGIC)
   const renderMessageText = (text: string) => {
@@ -320,14 +347,14 @@ export function CollaborationHub({
   }, [isOpen, scrollToBottom]);
 
   useEffect(() => {
-    if (messages.length > prevMessagesCount.current) {
-      const lastMsg = messages[messages.length - 1];
+    if (localMessages.length > prevMessagesCount.current) {
+      const lastMsg = localMessages[localMessages.length - 1];
       if (lastMsg.senderId !== currentUserId && isOpen) {
         receivedSound.current?.play().catch(() => {});
       }
     }
-    prevMessagesCount.current = messages.length;
-  }, [messages, currentUserId, isOpen]);
+    prevMessagesCount.current = localMessages.length;
+  }, [localMessages, currentUserId, isOpen]);
 
   const sendChat = async (isPrivate = false, recipientId?: string, recipientName?: string) => {
     if (!chatMessage.trim() || isSending) return;
@@ -395,8 +422,8 @@ export function CollaborationHub({
 
   const toggleReaction = async (msgId: string, emoji: string) => {
     try {
-      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
-      const updatedMessages = messages.map(m => {
+      const docRef = doc(dbCollab, collectionName, effectiveDocId);
+      const updatedMessages = localMessages.map(m => {
         if (m.id === msgId) {
           const reactions = { ...(m.reactions || {}) };
           const users = reactions[emoji] || [];
@@ -416,8 +443,8 @@ export function CollaborationHub({
 
   const toggleResolve = async (msgId: string) => {
     try {
-      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
-      const updatedMessages = messages.map(m => 
+      const docRef = doc(dbCollab, collectionName, effectiveDocId);
+      const updatedMessages = localMessages.map(m =>
         m.id === msgId ? { ...m, isResolved: !m.isResolved } : m
       );
       await updateDoc(docRef, { messages: updatedMessages });

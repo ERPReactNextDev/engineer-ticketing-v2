@@ -186,7 +186,7 @@ export default function EngiconnectDashboard() {
         if (!db || !userId) return;
         const unsubSite = onSnapshot(query(collection(db, "appointments"), where("status", "==", "PENDING")), (snap) => setNotifications(prev => ({ ...prev, siteVisit: snap.size })));
         const unsubShop = onSnapshot(query(collection(db, "shop_drawing_requests"), where("department", "==", "ENGINEERING"), where("status", "==", "PENDING_REVIEW")), (snap) => setNotifications(prev => ({ ...prev, shopDrawing: snap.size })));
-        const unsubJob = onSnapshot(query(collection(db, "job_requests"), where("status", "==", "PENDING")), (snap) => setNotifications(prev => ({ ...prev, jobRequest: snap.size })));
+        const unsubJob = onSnapshot(query(collection(db, "job_requests"), where("status", "==", "JR FORM FORWARD TO ENGINEERING")), (snap) => setNotifications(prev => ({ ...prev, jobRequest: snap.size })));
         const unsubOther = onSnapshot(query(collection(db, "other_requests"), where("status", "==", "PENDING")), (snap) => setNotifications(prev => ({ ...prev, otherRequest: snap.size })));
         const unsubDialux = onSnapshot(query(collection(db, "dialux_requests"), where("status", "==", "PENDING")), (snap) => setNotifications(prev => ({ ...prev, dialuxRequest: snap.size })));
         

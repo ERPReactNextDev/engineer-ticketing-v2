@@ -85,13 +85,30 @@ interface JobRequest {
 
   // Project Info
   projectName: string;
-  client: string;
+  projectTitle: string;        // Detailed project title
+  clientName: string;          // Client name (defaults to "GENERAL")
+  client: string;              // Alias for clientName
   description: string;
+  scopeOfWork: string;         // Detailed scope of work
   priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+
+  // Location
+  location: string;            // Project location address
+  locationCoordinates?: {     // Optional map coordinates
+    lat: number;
+    lng: number;
+  };
+
+  // Agent & Contact
+  agentName: string;          // Agent/Reference ID (e.g., "RP-CSR-XXXXXX")
+  contactPerson?: string;     // Contact person at site
+  email?: string;             // Contact email
+  contactNumber?: string;     // Contact phone number
 
   // Status & Assignment
   status: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
   submittedBy: string;         // userId
+  submittedByName?: string;    // Denormalized name of submitter
   assignedTo?: string;         // userId of assigned engineer
   pic?: string;                // Person In Charge name
 

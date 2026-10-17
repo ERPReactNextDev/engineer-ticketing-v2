@@ -44,25 +44,34 @@ import { JobCounterAdmin } from "@/components/job-counter-admin"
    CONSTANTS
 ───────────────────────────────────────────── */
 const STATUS_META: Record<string, { label: string; color: string; bg: string; border: string; dot: string }> = {
-    PENDING: {
-        label: "Pending Job",
+    "JR FORM APPROVED BY PROCUREMENT": {
+        label: "JR FORM APPROVED BY PROCUREMENT",
+        color: "text-teal-600", bg: "bg-transparent", border: "border-transparent", dot: "bg-teal-500",
+    },
+    "JR FORM FORWARD TO ENGINEERING": {
+        label: "JR FORM FORWARD TO ENGINEERING",
         color: "text-amber-600", bg: "bg-transparent", border: "border-transparent", dot: "bg-amber-500",
     },
-    IN_PROGRESS: {
-        label: "In Progress",
+    "JR FORM FORWARD TO ENGINEERING LEADER": {
+        label: "JR FORM FORWARD TO ENGINEERING LEADER",
+        color: "text-violet-600", bg: "bg-transparent", border: "border-transparent", dot: "bg-violet-500",
+    },
+    "JR FORM FORWARD TO ENGINEERING MANAGER": {
+        label: "JR FORM FORWARD TO ENGINEERING MANAGER",
         color: "text-blue-600", bg: "bg-transparent", border: "border-transparent", dot: "bg-blue-500",
     },
-    COMPLETED: {
-        label: "Job Completed",
+    "JR FORM FORWARD TO PROCUREMENT": {
+        label: "JR FORM FORWARD TO PROCUREMENT",
         color: "text-emerald-600", bg: "bg-transparent", border: "border-transparent", dot: "bg-emerald-500",
     },
 }
 
 const FILTERS = [
     { key: null, label: "All Jobs", icon: LayoutGrid, variant: "default" },
-    { key: "PENDING", label: "Pending", icon: Clock, variant: "warning" },
-    { key: "IN_PROGRESS", label: "Active", icon: Wrench, variant: "blue" },
-    { key: "COMPLETED", label: "Completed", icon: CheckCircle2, variant: "emerald" },
+    { key: "JR FORM FORWARD TO ENGINEERING", label: "Engineering", icon: Clock, variant: "warning" },
+    { key: "JR FORM FORWARD TO ENGINEERING LEADER", label: "Eng Leader", icon: Clock, variant: "warning" },
+    { key: "JR FORM FORWARD TO ENGINEERING MANAGER", label: "Eng Manager", icon: Clock, variant: "warning" },
+    { key: "JR FORM FORWARD TO PROCUREMENT", label: "Procurement", icon: CheckCircle2, variant: "emerald" },
 ]
 
 function getStatusMeta(status: string) {
@@ -199,6 +208,8 @@ function UserGuideDialog({ open, onOpenChange }: any) {
                             <h4 className="text-[15px] font-black mb-1">Quick Reminders!</h4>
                             <ul className="text-[11px] font-medium text-zinc-400 space-y-2 list-disc pl-4">
                                 <li><span className="text-white">Sales/IT</span> can create new job requests.</li>
+                                <li><span className="text-white">Engineering/IT</span> can approve and forward requests.</li>
+                                <li><span className="text-white">Procurement</span> can view all job requests (view-only).</li>
                                 <li><span className="text-white">Red Priority</span> means urgent attention needed.</li>
                                 <li><span className="text-white">Green</span> means the job is successfully completed!</li>
                             </ul>
@@ -257,12 +268,19 @@ function RoleInsights({ user, requests, setShowGuide }: any) {
     const isManager = ["SUPER ADMIN", "MANAGER", "LEADER"].includes(user.role)
     const isIT = user.dept === "IT"
     const isSales = user.dept === "SALES"
+    const isProcurement = user.dept === "PROCUREMENT"
 
-    const urgentJobs = requests.filter((r: any) => r.priority === "URGENT" && r.status !== "COMPLETED")
-    const myPending = requests.filter((r: any) => r.status === "PENDING" && r.submittedBy === user.id)
+    const urgentJobs = requests.filter((r: any) => r.priority === "URGENT" && r.status !== "JR FORM FORWARD TO PROCUREMENT" && r.status !== "JR FORM FORWARD TO ENGINEERING MANAGER")
+const myPending = requests.filter((r: any) =>
+    (r.status === "JR FORM FORWARD TO ENGINEERING" ||
+     r.status === "JR FORM FORWARD TO ENGINEERING LEADER" ||
+     r.status === "JR FORM FORWARD TO ENGINEERING MANAGER") &&
+    (r.submittedBy === user.id || r.submittedBy === user.refId || r.createdBy === user.refId)
+)
+const procurementPending = requests.filter((r: any) => r.status === "JR FORM FORWARD TO PROCUREMENT")
 
     const completionRate = requests.length > 0
-        ? (requests.filter((r: any) => r.status === "COMPLETED").length / requests.length) * 100
+        ? (requests.filter((r: any) => r.status === "JR FORM FORWARD TO PROCUREMENT" || r.status === "JR FORM FORWARD TO ENGINEERING MANAGER").length / requests.length) * 100
         : 0
 
     return (
@@ -271,15 +289,15 @@ function RoleInsights({ user, requests, setShowGuide }: any) {
             <div className="bg-white rounded-[24px] p-4 border border-zinc-200/60 shadow-sm flex items-center justify-between group overflow-hidden relative transition-all hover:shadow-md">
                 <div className="flex items-center gap-3">
                     <div className="size-10 bg-zinc-900 rounded-xl flex items-center justify-center text-white shadow-lg shadow-zinc-200 flex-shrink-0 group-hover:scale-110 transition-transform">
-                        {isSales ? <TrendingUp size={20} /> : <Target size={20} />}
+                        {isSales ? <TrendingUp size={20} /> : isProcurement ? <CheckCircle size={20} /> : <Target size={20} />}
                     </div>
                     <div>
                         <h4 className="text-[10px] font-black text-zinc-400 uppercase tracking-widest leading-none mb-1">
-                            {isSales ? "My Pipeline" : "Priority Jobs"}
+                            {isSales ? "My Pipeline" : isProcurement ? "Ready for Procurement" : "Priority Jobs"}
                         </h4>
                         <div className="flex items-baseline gap-1.5">
                             <span className="text-xl font-black text-zinc-900 leading-none tracking-tighter">
-                                {isSales ? myPending.length : urgentJobs.length}
+                                {isSales ? myPending.length : isProcurement ? procurementPending.length : urgentJobs.length}
                             </span>
                             <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">Active</span>
                         </div>
@@ -287,9 +305,9 @@ function RoleInsights({ user, requests, setShowGuide }: any) {
                 </div>
                 <div className="flex flex-col items-end">
                     <p className="text-[8px] font-black text-zinc-300 uppercase tracking-widest leading-tight text-right max-w-[80px]">
-                        {isSales ? "Pending requests" : "Urgent attention"}
+                        {isSales ? "Pending requests" : isProcurement ? "Forwarded jobs" : "Urgent attention"}
                     </p>
-                    {urgentJobs.length > 0 && !isSales && (
+                    {urgentJobs.length > 0 && !isSales && !isProcurement && (
                         <div className="mt-2 size-2 bg-rose-500 rounded-full animate-ping" />
                     )}
                 </div>
@@ -302,7 +320,7 @@ function RoleInsights({ user, requests, setShowGuide }: any) {
                         <CheckCircle size={20} />
                     </div>
                     <div className="flex-1 pr-4">
-                        <h4 className="text-[10px] font-black text-zinc-400 uppercase tracking-widest leading-none mb-2">Completion Rate</h4>
+                        <h4 className="text-[10px] font-black text-zinc-400 uppercase tracking-widest leading-none mb-2">Procurement Rate</h4>
                         <div className="flex items-center gap-3">
                             <div className="flex-1 h-2 bg-zinc-50 rounded-full overflow-hidden border border-zinc-100">
                                 <div className="h-full bg-emerald-500 rounded-full transition-all duration-1000 shadow-[0_0_8px_rgba(16,185,129,0.4)]" style={{ width: `${completionRate}%` }} />
@@ -314,7 +332,7 @@ function RoleInsights({ user, requests, setShowGuide }: any) {
             </div>
 
             {/* Dynamic Widget 3: Help or Stats */}
-            {(isManager || isIT) ? (
+            {(isManager || isIT || isProcurement) ? (
                 <div className="bg-zinc-900 rounded-[24px] p-4 border border-zinc-800 shadow-xl flex items-center justify-between text-white group transition-all hover:bg-zinc-800">
                     <div className="flex items-center gap-3">
                         <div className="size-10 bg-white/10 rounded-xl flex items-center justify-center text-white flex-shrink-0 group-hover:rotate-12 transition-transform">
@@ -363,12 +381,12 @@ function RoleInsights({ user, requests, setShowGuide }: any) {
 
 /**
  * @name JobRequestManagementPage
- * @protocol Sales/IT Create, All View with Role Filtering
+ * @protocol Sales/IT Create, All View with Role Filtering (Procurement has view-only access)
  * @version 3.0-ProductivityEnhanced
  */
 export default function JobRequestManagementPage() {
     const router = useRouter()
-    const [user, setUser] = React.useState<{ id: string | null; dept: string; role: string; refId: string; name: string }>({ id: null, dept: "", role: "", refId: "", name: "" })
+    const [user, setUser] = React.useState<{ id: string | null; dept: string; role: string; refId: string; name: string; engiconnectRole: string }>({ id: null, dept: "", role: "", refId: "", name: "", engiconnectRole: "" })
     const [isUserLoading, setIsUserLoading] = React.useState(true)
     const [requests, setRequests] = React.useState<any[]>([])
     const [subordinateIds, setSubordinateIds] = React.useState<string[]>([])
@@ -430,7 +448,8 @@ export default function JobRequestManagementPage() {
                     dept: data.Department?.toUpperCase() || "SALES",
                     role: finalRole,
                     refId: referenceId,
-                    name
+                    name,
+                    engiconnectRole: data.engiconnect_role?.toUpperCase() || "MEMBER"
                 })
 
                 // Fetch subordinates if role is TSM or MANAGER
@@ -482,7 +501,9 @@ export default function JobRequestManagementPage() {
                             return hasManagerAssigned
                         })
                     }
-                    setSubordinateIds(subs.map(u => u._id))
+                    setSubordinateIds(
+    subs.flatMap(u => [u._id, u.id, u.ReferenceID, u.referenceId].filter(Boolean).map(String))
+)
                 }
             } catch (error) {
                 console.error("Profile Retrieval Error:", error)
@@ -494,47 +515,71 @@ export default function JobRequestManagementPage() {
     }, [])
 
     // 2. LIVE DATA SYNC — server-side filtered to avoid full collection downloads
-    React.useEffect(() => {
-        if (isUserLoading || !user.id) return;
+React.useEffect(() => {
+    if (isUserLoading || !user.id) return
 
-        setIsDataLoading(true)
-        const userDept = user.dept.toUpperCase();
-        const userRole = user.role.toUpperCase();
-        const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || ["SUPER ADMIN", "LEADER"].includes(userRole);
-        const isTSM = userRole === "TSM";
-        const isManager = userRole === "MANAGER";
+    setIsDataLoading(true)
+    const userDept = user.dept.toUpperCase()
+    const userRole = user.role.toUpperCase()
+    const hasGlobalAccess =
+        userDept === "IT" || userDept === "ENGINEERING" || userDept === "PROCUREMENT" || ["SUPER ADMIN", "LEADER"].includes(userRole)
 
-        // FIX: Apply server-side where filter for non-admin users
-        let q;
-        if (hasGlobalAccess) {
-            q = query(collection(db, "job_requests"), orderBy("createdAt", "desc"))
-        } else if ((isTSM || isManager) && subordinateIds.length > 0) {
-            q = query(collection(db, "job_requests"), where("submittedBy", "in", [user.id, ...subordinateIds.slice(0, 9)]), orderBy("createdAt", "desc"))
-        } else {
-            q = query(collection(db, "job_requests"), where("submittedBy", "==", user.id), orderBy("createdAt", "desc"))
+    const mapDoc = (d: any) => {
+        const data = d.data()
+        return {
+            id: d.id.slice(-6).toUpperCase(),
+            fullId: d.id,
+            ...data,
+            status: (data.status || "JR FORM FORWARD TO ENGINEERING").toUpperCase(),
         }
+    }
+    const toMillis = (v: any) =>
+        v?.toDate ? v.toDate().getTime() : v ? new Date(v).getTime() || 0 : 0
 
-        const unsubscribe = onSnapshot(q, (snapshot: any) => {
-            const liveData = snapshot.docs.map((doc: any) => {
-                const data = doc.data()
-                return {
-                    id: doc.id.slice(-6).toUpperCase(),
-                    fullId: doc.id,
-                    ...data,
-                    status: data.status?.toUpperCase() || "PENDING",
-                    submittedBy: data.submittedBy,
-                }
-            })
+    // Global access: unchanged
+    if (hasGlobalAccess) {
+        const unsub = onSnapshot(
+            query(collection(db, "job_requests"), orderBy("createdAt", "desc")),
+            (snap: any) => { setRequests(snap.docs.map(mapDoc)); setIsDataLoading(false) },
+            (err) => { console.error("Firestore Sync Error:", err); setIsDataLoading(false) }
+        )
+        return () => unsub()
+    }
 
-            setRequests(liveData)
-            setIsDataLoading(false)
-        }, (error) => {
-            console.error("Firestore Sync Error:", error)
-            setIsDataLoading(false)
+    // Everyone else: all identifiers that can appear in createdBy / submittedBy
+    const ids = Array.from(new Set(
+        [user.refId, user.id, ...subordinateIds].filter(Boolean).map(String)
+    ))
+    const chunks: string[][] = []
+    for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30))
+
+    const bucket = new Map<string, any>()
+    const sources: Record<string, Map<string, any>> = {}
+    const flush = () => {
+        bucket.clear()
+        Object.values(sources).forEach(m => m.forEach((v, k) => bucket.set(k, v)))
+        setRequests(
+            Array.from(bucket.values()).sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt))
+        )
+        setIsDataLoading(false)
+    }
+
+    const unsubs: Array<() => void> = []
+    chunks.forEach((chunk, ci) => {
+        ;(["createdBy", "submittedBy"] as const).forEach(field => {
+            const key = `${field}-${ci}`
+            sources[key] = new Map()
+            // no orderBy → no composite index needed; sorted client-side
+            const q = query(collection(db, "job_requests"), where(field, "in", chunk))
+            unsubs.push(onSnapshot(q, (snap: any) => {
+                sources[key] = new Map(snap.docs.map((d: any) => [d.id, mapDoc(d)]))
+                flush()
+            }, (err) => { console.error(`Sync error (${key}):`, err); setIsDataLoading(false) }))
         })
+    })
 
-        return () => unsubscribe()
-    }, [user, isUserLoading, subordinateIds])
+    return () => unsubs.forEach(u => u())
+}, [user, isUserLoading, subordinateIds])
 
     const filteredRequests = React.useMemo(() => {
         return requests.filter(r => {
@@ -573,9 +618,11 @@ export default function JobRequestManagementPage() {
 
     const counts = {
         all: requests.length,
-        pending: requests.filter(r => r.status === "PENDING").length,
-        inProgress: requests.filter(r => r.status === "IN_PROGRESS").length,
-        completed: requests.filter(r => r.status === "COMPLETED").length,
+        pending: requests.filter(r => r.status === "JR FORM FORWARD TO ENGINEERING").length,
+        engineeringLeader: requests.filter(r => r.status === "JR FORM FORWARD TO ENGINEERING LEADER").length,
+        engineeringManager: requests.filter(r => r.status === "JR FORM FORWARD TO ENGINEERING MANAGER").length,
+        completed: requests.filter(r => r.status === "JR FORM FORWARD TO PROCUREMENT").length,
+        approved: requests.filter(r => r.status === "JR FORM APPROVED BY PROCUREMENT").length,
     }
 
     return (
@@ -644,27 +691,20 @@ export default function JobRequestManagementPage() {
                                 colorClass="bg-zinc-50 text-zinc-500" 
                                 loading={isDataLoading} 
                             />
-                            <DashboardCard 
-                                label="PENDING" 
-                                value={counts.pending} 
+                            <DashboardCard
+                                label="ENGINEERING"
+                                value={counts.pending}
                                 subValue={`${((counts.pending / (counts.all || 1)) * 100).toFixed(0)}%`}
-                                icon={Clock} 
-                                colorClass="bg-amber-50 text-amber-600" 
-                                loading={isDataLoading} 
+                                icon={Clock}
+                                colorClass="bg-amber-50 text-amber-600"
+                                loading={isDataLoading}
                             />
-                            <DashboardCard 
-                                label="IN PROGRESS" 
-                                value={counts.inProgress} 
-                                icon={Wrench} 
-                                colorClass="bg-blue-50 text-blue-600" 
-                                loading={isDataLoading} 
-                            />
-                            <DashboardCard 
-                                label="COMPLETED" 
-                                value={counts.completed} 
-                                icon={CheckCircle2} 
-                                colorClass="bg-emerald-50 text-emerald-600" 
-                                loading={isDataLoading} 
+                            <DashboardCard
+                                label="PROCUREMENT"
+                                value={counts.completed}
+                                icon={CheckCircle2}
+                                colorClass="bg-emerald-50 text-emerald-600"
+                                loading={isDataLoading}
                             />
                         </section>
 
@@ -697,37 +737,59 @@ export default function JobRequestManagementPage() {
                                         ALL JOBS ({counts.all})
                                     </button>
                                     <button
-                                        onClick={() => { setSelectedStatus("PENDING"); setCurrentPage(1); }}
+                                        onClick={() => { setSelectedStatus("JR FORM FORWARD TO ENGINEERING"); setCurrentPage(1); }}
                                         className={cn(
                                             "px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
-                                            selectedStatus === "PENDING"
+                                            selectedStatus === "JR FORM FORWARD TO ENGINEERING"
                                                 ? "bg-zinc-900 text-white shadow-md shadow-zinc-200"
                                                 : "bg-white border border-zinc-200/60 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
                                         )}
                                     >
-                                        PENDING ({counts.pending})
+                                        ENGINEERING ({counts.pending})
                                     </button>
                                     <button
-                                        onClick={() => { setSelectedStatus("IN_PROGRESS"); setCurrentPage(1); }}
+                                        onClick={() => { setSelectedStatus("JR FORM FORWARD TO ENGINEERING LEADER"); setCurrentPage(1); }}
                                         className={cn(
                                             "px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
-                                            selectedStatus === "IN_PROGRESS"
+                                            selectedStatus === "JR FORM FORWARD TO ENGINEERING LEADER"
                                                 ? "bg-zinc-900 text-white shadow-md shadow-zinc-200"
                                                 : "bg-white border border-zinc-200/60 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
                                         )}
                                     >
-                                        ACTIVE ({counts.inProgress})
+                                        ENG LEADER ({counts.engineeringLeader})
                                     </button>
                                     <button
-                                        onClick={() => { setSelectedStatus("COMPLETED"); setCurrentPage(1); }}
+                                        onClick={() => { setSelectedStatus("JR FORM FORWARD TO ENGINEERING MANAGER"); setCurrentPage(1); }}
                                         className={cn(
                                             "px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
-                                            selectedStatus === "COMPLETED"
+                                            selectedStatus === "JR FORM FORWARD TO ENGINEERING MANAGER"
                                                 ? "bg-zinc-900 text-white shadow-md shadow-zinc-200"
                                                 : "bg-white border border-zinc-200/60 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
                                         )}
                                     >
-                                        COMPLETED ({counts.completed})
+                                        ENG MANAGER ({counts.engineeringManager})
+                                    </button>
+                                    <button
+                                        onClick={() => { setSelectedStatus("JR FORM FORWARD TO PROCUREMENT"); setCurrentPage(1); }}
+                                        className={cn(
+                                            "px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
+                                            selectedStatus === "JR FORM FORWARD TO PROCUREMENT"
+                                                ? "bg-zinc-900 text-white shadow-md shadow-zinc-200"
+                                                : "bg-white border border-zinc-200/60 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
+                                        )}
+                                    >
+                                        PROCUREMENT ({counts.completed})
+                                    </button>
+                                    <button
+                                        onClick={() => { setSelectedStatus("JR FORM APPROVED BY PROCUREMENT"); setCurrentPage(1); }}
+                                        className={cn(
+                                            "px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap",
+                                            selectedStatus === "JR FORM APPROVED BY PROCUREMENT"
+                                                ? "bg-zinc-900 text-white shadow-md shadow-zinc-200"
+                                                : "bg-white border border-zinc-200/60 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-50"
+                                        )}
+                                    >
+                                        PROC. APPROVED ({counts.approved})
                                     </button>
                                 </div>
                             </div>
@@ -757,7 +819,7 @@ export default function JobRequestManagementPage() {
                         {/* ── DATA TABLE ── */}
                         <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
                             {/* Table Header - Aligned to Site Visit Basis */}
-                            <div className="hidden md:grid grid-cols-[120px_1fr_120px_120px_120px_44px] gap-6 p-4 px-6 bg-zinc-50/50 border-b border-zinc-100 text-[9px] font-black uppercase tracking-widest text-zinc-400">
+                            <div className="hidden md:grid grid-cols-[120px_minmax(0,2fr)_120px_120px_minmax(180px,1fr)_44px] gap-6 p-4 px-6 bg-zinc-50/50 border-b border-zinc-100 text-[9px] font-black uppercase tracking-widest text-zinc-400">
                                 <span>REF_ID</span>
                                 <span>PROJECT / CLIENT</span>
                                 <span>TIMELINE</span>
@@ -798,7 +860,7 @@ export default function JobRequestManagementPage() {
                                         return (
                                             <div
                                                 key={r.fullId}
-                                                className="grid grid-cols-1 md:grid-cols-[120px_1fr_120px_120px_120px_44px] gap-6 p-4 px-6 items-center hover:bg-zinc-50/60 transition-all cursor-pointer group"
+                                                className="grid grid-cols-1 md:grid-cols-[120px_minmax(0,2fr)_120px_120px_minmax(180px,1fr)_44px] gap-6 p-4 px-6 items-center hover:bg-zinc-50/60 transition-all cursor-pointer group"
                                                 onClick={() => router.push(`/request/job/${r.fullId}`)}
                                             >
                                                 {/* JOB REQUEST NUMBER - Display sequential number if available */}
@@ -835,7 +897,9 @@ export default function JobRequestManagementPage() {
                                                 <div className="flex items-center gap-2">
                                                     <Calendar size={12} className="text-zinc-300" />
                                                     <span className="text-[10px] font-black text-zinc-900 uppercase tracking-widest whitespace-nowrap">
-                                                        {r.createdAt ? format(r.createdAt.toDate(), "yyyy-MM-dd") : "—"}
+                                                        {r.createdAt
+    ? format(r.createdAt.toDate ? r.createdAt.toDate() : new Date(r.createdAt), "yyyy-MM-dd")
+    : "—"}
                                                     </span>
                                                 </div>
 
@@ -859,18 +923,18 @@ export default function JobRequestManagementPage() {
                                                 </div>
 
                                                 {/* STATUS - Dot Basis Style */}
-                                                <div>
+                                                <div className="min-w-0">
                                                     <div className={cn(
-                                                        "inline-flex items-center gap-2 text-[9px] font-black uppercase tracking-widest whitespace-nowrap",
+                                                        "inline-flex items-start gap-2 text-[9px] font-black uppercase tracking-widest leading-snug",
                                                         meta.color
                                                     )}>
-                                                        <div className={cn("size-1.5 rounded-full", meta.dot)} />
-                                                        {meta.label}
+                                                        <div className={cn("size-1.5 rounded-full mt-[3px] flex-shrink-0", meta.dot)} />
+                                                        <span className="break-words">{meta.label}</span>
                                                     </div>
                                                 </div>
 
                                                 {/* Action */}
-                                                <div className="flex justify-end">
+                                                <div className="flex justify-end flex-shrink-0">
                                                     <div className="size-8 rounded-xl bg-zinc-50 flex items-center justify-center text-zinc-400 group-hover:bg-zinc-900 group-hover:text-white transition-all">
                                                         <ChevronRight size={16} />
                                                     </div>

@@ -8,11 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { 
+import {
   Plus, Send, Loader2, Wrench, FileText, X, ShieldCheck, Clock, Camera, ClipboardCheck,
-  AlertCircle, CheckCircle2, ChevronRight, Calendar, Info, ChevronDown, Check, FlaskConical
+  AlertCircle, CheckCircle2, ChevronRight, Calendar, Info, ChevronDown, Check, FlaskConical, MapPin
 } from "lucide-react";
-import { 
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -41,10 +41,19 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 // Database
 import { db } from "@/lib/firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+
+// MapPicker component (client-side only for Leaflet)
+import MapPicker from "@/components/map-picker";
 
 export default function JobRequestWizard() {
   const router = useRouter();
@@ -56,13 +65,18 @@ export default function JobRequestWizard() {
 
   // FORM STATES
   const [formData, setFormData] = useState({
+    projectTitle: "",
+    location: "",
+    locationCoordinates: { lat: 0, lng: 0 },
+    agentName: "",
     projectName: "",
     contactPerson: "",
     email: "",
     contactNumber: "",
     scopeOfWork: "",
     mountingHeight: "",
-    workingTime: "",
+    workingTimeFrom: "",
+    workingTimeTo: "",
     otherAssistance: "",
     otherDocuments: "",
     priority: "MEDIUM",
@@ -88,6 +102,15 @@ export default function JobRequestWizard() {
   const [loadingUser, setLoadingUser] = useState(true);
   const [openCustomer, setOpenCustomer] = useState(false);
   const [isCustomerSelected, setIsCustomerSelected] = useState(false);
+
+  // MAP STATES
+  const [showMapPicker, setShowMapPicker] = useState(false);
+  const [selectedCoordinates, setSelectedCoordinates] = useState<{ lat: number; lng: number } | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Pre-calculate memoized accounts for better responsiveness
   const memoizedAccounts = React.useMemo(() => accounts, [accounts]);
@@ -167,8 +190,15 @@ export default function JobRequestWizard() {
             manager: data.Manager || "",
             department: data.Department || data.department || "",
             role: data.Role || data.role || "MEMBER",
+            engiconnectRole: data.engiconnect_role || "MEMBER",
             name: `${data.Firstname || ""} ${data.Lastname || ""}`.trim()
           });
+          // Auto-populate agentName with ReferenceID
+          if (data.ReferenceID) {
+            setFormData(prev => ({ ...prev, agentName: data.ReferenceID }));
+          } else {
+            setFormData(prev => ({ ...prev, agentName: prev.agentName || "" }));
+          }
         })
         .catch(err => console.error("USER_FETCH_ERROR", err))
         .finally(() => setLoadingUser(false));
@@ -179,11 +209,11 @@ export default function JobRequestWizard() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        setFormData(parsed.formData);
-        setSiteInstallation(parsed.siteInstallation);
-        setInHouse(parsed.inHouse);
-        setPermits(parsed.permits);
-        setWorkingDays(parsed.workingDays);
+        setFormData(prev => ({ ...prev, ...(parsed.formData || {}) }));
+        setSiteInstallation(parsed.siteInstallation || []);
+        setInHouse(parsed.inHouse || []);
+        setPermits(parsed.permits || []);
+        setWorkingDays(parsed.workingDays || []);
         if (parsed.savedAt) setLastSaved(new Date(parsed.savedAt));
       } catch (e) {
         console.error("Failed to load draft:", e);
@@ -211,8 +241,8 @@ export default function JobRequestWizard() {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         if (currentStep < 3) {
           if (currentStep === 2) {
-            if (!formData.projectName.trim() || !formData.scopeOfWork.trim()) {
-              return toast.error("Please fill in Project Name and Scope of Work.");
+            if (!formData.projectTitle?.trim() || !formData.location?.trim() || !formData.agentName?.trim() || !formData.projectName?.trim() || !formData.scopeOfWork?.trim()) {
+              return toast.error("Please fill in Project Title, Location, Agent Name, Project Name, and Scope of Work.");
             }
           }
           setCurrentStep(prev => prev + 1);
@@ -295,8 +325,8 @@ export default function JobRequestWizard() {
 
   const handleSubmit = async () => {
     if (isSubmitting || !userId) return;
-    if (!formData.projectName.trim()) {
-      return toast.error("Please enter a Project Name.");
+    if (!formData.projectTitle?.trim() || !formData.location?.trim() || !formData.agentName?.trim() || !formData.projectName?.trim()) {
+      return toast.error("Please fill in Project Title, Location, Agent Name, and Project Name.");
     }
 
     setIsSubmitting(true);
@@ -329,6 +359,22 @@ export default function JobRequestWizard() {
       const userName = localStorage.getItem("userName") || "Unknown User";
       const userRole = localStorage.getItem("userRole") || "MEMBER";
 
+      // Fetch user's details including ReferenceID and signature
+      let userReferenceId = userId;
+      let userSignature = "";
+      try {
+        const userRes = await fetch(`/api/user?id=${encodeURIComponent(userId)}`);
+        const userData = await userRes.json();
+        if (userData?.ReferenceID) {
+          userReferenceId = userData.ReferenceID;
+        }
+        if (userData?.signatureImage) {
+          userSignature = userData.signatureImage;
+        }
+      } catch (err) {
+        console.error("Failed to fetch user details:", err);
+      }
+
       await addDoc(collection(db, "job_requests"), {
         ...formData,
         siteInstallation,
@@ -337,9 +383,10 @@ export default function JobRequestWizard() {
         workingDays,
         attachments: uploadedUrls,
         jobRequestNo, // Unique sequential number: JR2026-0042
-        status: "PENDING",
-        createdBy: userId,
-        submittedBy: userId,
+        status: "JR FORM FORWARD TO ENGINEERING",
+        createdBy: userReferenceId,
+        createdBySignature: userSignature,
+        submittedBy: userReferenceId,
         submittedByName: userName,
         submittedByRole: userRole,
         createdAt: serverTimestamp(),
@@ -490,8 +537,8 @@ export default function JobRequestWizard() {
                           // Allow going to Scope without validation if coming from Assistance
                         }
                         if (currentStep === 2 && step.id > 2) {
-                          if (!formData.projectName.trim() || !formData.scopeOfWork.trim()) {
-                            return toast.error("Please fill in Project Name and Scope of Work.");
+                          if (!formData.projectTitle?.trim() || !formData.location?.trim() || !formData.agentName?.trim() || !formData.projectName?.trim() || !formData.scopeOfWork?.trim()) {
+                            return toast.error("Please fill in Project Title, Location, Agent Name, Project Name, and Scope of Work.");
                           }
                         }
                         setCurrentStep(step.id);
@@ -590,6 +637,74 @@ export default function JobRequestWizard() {
 
                   {currentStep === 2 && (
                     <div className="w-full space-y-4 animate-in slide-in-from-right-4 duration-300">
+                      <div className={`grid gap-6 ${userDetails?.referenceid ? "md:grid-cols-2" : "md:grid-cols-3"}`}>
+                        <div className="space-y-1.5">
+                          <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
+                            Project Title <span className="text-red-500 font-black">*</span>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Info size={10} className="text-slate-300" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-[9px] font-bold">The official title of the project</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </Label>
+                          <Input className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder="Enter project title" value={formData.projectTitle} onChange={e => setFormData({...formData, projectTitle: e.target.value})} />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
+                            Location <span className="text-red-500 font-black">*</span>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Info size={10} className="text-slate-300" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-[9px] font-bold">Site location or address</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </Label>
+                          <div className="flex gap-2">
+                            <Input
+                              className="h-11 rounded-xl font-bold text-[12px] flex-1 focus:ring-2 focus:ring-slate-900/10 transition-all"
+                              placeholder="Select location from map"
+                              value={formData.location}
+                              onChange={e => setFormData({...formData, location: e.target.value})}
+                              readOnly
+                            />
+                            <Button
+                              type="button"
+                              onClick={() => setShowMapPicker(true)}
+                              className="h-11 px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl transition-all"
+                            >
+                              <MapPin size={16} />
+                            </Button>
+                          </div>
+                        </div>
+                        {!userDetails?.referenceid && (
+                        <div className="space-y-1.5">
+                          <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
+                            Agent Name <span className="text-red-500 font-black">*</span>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Info size={10} className="text-slate-300" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-[9px] font-bold">Agent Reference ID</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </Label>
+                          <Input className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder={userDetails?.referenceid || "RP-CSR-XXXXXX"} value={formData.agentName} onChange={e => setFormData({...formData, agentName: e.target.value})} />
+                        </div>
+                        )}
+                      </div>
+
                       <div className="grid md:grid-cols-2 gap-6">
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between w-full">
@@ -866,7 +981,26 @@ export default function JobRequestWizard() {
                           </div>
                           <div className="space-y-2">
                             <Label className="text-[10px] font-black uppercase text-slate-400">Time Range</Label>
-                            <Input className="h-11 rounded-xl text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder="Time (e.g. 8am-5pm)" value={formData.workingTime} onChange={e => setFormData({...formData, workingTime: e.target.value})} />
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1">
+                                <Label className="text-[9px] font-bold uppercase text-slate-500">From</Label>
+                                <Input 
+                                  type="datetime-local" 
+                                  className="h-11 rounded-xl text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" 
+                                  value={formData.workingTimeFrom} 
+                                  onChange={e => setFormData({...formData, workingTimeFrom: e.target.value})} 
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <Label className="text-[9px] font-bold uppercase text-slate-500">To</Label>
+                                <Input 
+                                  type="datetime-local" 
+                                  className="h-11 rounded-xl text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" 
+                                  value={formData.workingTimeTo} 
+                                  onChange={e => setFormData({...formData, workingTimeTo: e.target.value})} 
+                                />
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -885,8 +1019,8 @@ export default function JobRequestWizard() {
                     <Button 
                       onClick={() => {
                         if (currentStep === 2) {
-                          if (!formData.projectName.trim() || !formData.scopeOfWork.trim()) {
-                            return toast.error("Please fill in Project Name and Scope of Work.");
+                          if (!formData.projectTitle?.trim() || !formData.location?.trim() || !formData.agentName?.trim() || !formData.projectName?.trim() || !formData.scopeOfWork?.trim()) {
+                            return toast.error("Please fill in Project Title, Location, Agent Name, Project Name, and Scope of Work.");
                           }
                         }
                         setCurrentStep(prev => prev + 1);
@@ -913,6 +1047,20 @@ export default function JobRequestWizard() {
                   </h3>
                   
                   <div className="space-y-4">
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">Project Title</p>
+                      <p className="text-[13px] font-bold truncate">{formData.projectTitle || "Not specified"}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">Location</p>
+                      <p className="text-[13px] font-bold truncate">{formData.location || "Not specified"}</p>
+                    </div>
+                    {!userDetails?.referenceid && (
+                      <div className="space-y-1">
+                        <p className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">Agent Name</p>
+                        <p className="text-[13px] font-bold truncate">{formData.agentName || "Not specified"}</p>
+                      </div>
+                    )}
                     <div className="space-y-1">
                       <p className="text-[9px] font-black text-slate-500 uppercase tracking-tighter">Project & Priority</p>
                       <div className="flex items-center gap-2">
@@ -977,6 +1125,39 @@ export default function JobRequestWizard() {
           </main>
         </SidebarInset>
       </SidebarProvider>
+
+      {/* Map Picker Dialog */}
+      {isMounted && (
+        <Dialog open={showMapPicker} onOpenChange={setShowMapPicker}>
+          <DialogContent className="max-w-3xl max-h-[80vh] p-0" showCloseButton={false}>
+            <DialogHeader className="p-4 border-b border-slate-200 flex flex-row items-center justify-between">
+              <DialogTitle className="text-[12px] font-black uppercase tracking-wider">Select Location on Map</DialogTitle>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowMapPicker(false)}
+                className="h-8 w-8 p-0"
+              >
+                <X size={14} />
+              </Button>
+            </DialogHeader>
+            <div className="p-4 h-[500px]">
+              <MapPicker
+                onLocationSelect={(lat: number, lng: number, address: string) => {
+                  setFormData(prev => ({
+                    ...prev,
+                    location: address,
+                    locationCoordinates: { lat, lng }
+                  }));
+                  setSelectedCoordinates({ lat, lng });
+                  setShowMapPicker(false);
+                }}
+                initialPosition={selectedCoordinates || { lat: 14.5995, lng: 120.9842 }}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </ProtectedPageWrapper>
   );
 }
