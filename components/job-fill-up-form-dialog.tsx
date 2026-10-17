@@ -863,7 +863,7 @@ export function JobFillUpFormDialog({
   const hasAnyProc = boqSections.some((s) => s.rows.some((r) => procRowEntered(procRows[r.id])));
 
   const updateProc = (rowId: string, key: keyof ProcurementRow, value: string) =>
-    setProcRows((prev) => ({ ...prev, [rowId]: { qty: "", cost: "", ...prev[rowId], [key]: value } }));
+    setProcRows((prev) => ({ ...prev, [rowId]: { ...prev[rowId], [key]: value } }));
 
   // Paste a block from Excel into the procurement columns, starting at the clicked row
   // startCol 0 = pasted into Qty (col0 = qty, col1 = cost), 1 = pasted into Cost (col0 = cost)
