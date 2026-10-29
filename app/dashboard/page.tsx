@@ -55,6 +55,7 @@ import { supabase } from "@/utils/supabase";
 import { FloatingActionButton } from "@/components/floating-action-button";
 import { DashboardGuide } from "@/components/dashboard-guide";
 import { EnhancedNotifications } from "@/components/enhanced-notifications";
+import { needsJobRequestAttention } from "@/lib/job-request-notifications";
 
 /* ─────────────────────────────────────────────
    CUSTOM ICON
@@ -1043,7 +1044,7 @@ function EngiconnectDashboardContent() {
         if (!isMounted) return
 
         // Check URL parameter first (from TaskFlow iframe), then localStorage
-        const urlUserId = searchParams?.get("userId")
+        const urlUserId = searchParams?.get("userId") || searchParams?.get("id")
         const storedUserId = conxStorage.getItem("userId")
         const finalUserId = urlUserId || storedUserId
 
@@ -1116,7 +1117,12 @@ function EngiconnectDashboardContent() {
                             return uMan === myCleanName || uMan === referenceId || uManName === myCleanName || uMan_low === myCleanName || uMan_low === referenceId || uManName_low === myCleanName
                         })
                     }
-                    setSubordinateIds(subs.map(u => u._id))
+                    setSubordinateIds(
+                        subs
+                            .map(u => u._id ?? u.UserId ?? u.id)
+                            .filter(id => id !== null && id !== undefined && String(id).trim() !== "")
+                            .map(String)
+                    )
                 }
                 setLoadingCustomerCount(true)
                 const params = new URLSearchParams({ referenceid: mongoData.ReferenceID || "", role: finalRole, name: `${mongoData.Firstname || ""} ${mongoData.Lastname || ""}`.trim(), department: dept, limit: "1" })
@@ -1209,19 +1215,18 @@ function EngiconnectDashboardContent() {
             setNotifications(prev => ({ ...prev, shopDrawing: pending, unreadByService: { ...prev.unreadByService, shopDrawing: unread } }))
         })
 
-        const jobQuery = hasGlobalAccess
+        const hasJobRequestAccess = hasGlobalAccess || userDept === "PROCUREMENT"
+        const jobQuery = hasJobRequestAccess
             ? query(collection(db, "job_requests"), where("status", "not-in", ["COMPLETED", "CANCELLED", "DONE"]))
             : isTSM
                 ? query(collection(db, "job_requests"), where("submittedBy", "in", [userId, ...subordinateIds.slice(0, 9)]))
                 : query(collection(db, "job_requests"), where("submittedBy", "==", userId))
 
         const unsubJob = onSnapshot(jobQuery, snap => {
-            let docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
-            const isEngJR = userDept === "ENGINEERING" || userDept === "IT"; const isSalesJR = userDept === "SALES"; const isMgrJR = ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole)
+            const docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
             const pending = docs.filter((d: any) => {
                 const s = (d.status || "").toUpperCase(); if (["COMPLETED", "CANCELLED", "DONE"].includes(s)) return false
-                const needEng = s.includes("ASSIGNED") || s.includes("PROGRESS") || s.includes("APPROVED"); const needSales = s === "PENDING" || s.includes("SUBMITTED") || s.includes("AWAITING")
-                return isMgrJR || (isEngJR && needEng) || (isSalesJR && needSales)
+                return needsJobRequestAttention(s, userDept, userRole) && d.viewedStatusByUser?.[userId] !== s
             }).length
             const unread = calculateUnread(docs, userId)
             setNotifications(prev => ({ ...prev, jobRequest: pending, unreadByService: { ...prev.unreadByService, jobRequest: unread } }))
@@ -1306,7 +1311,7 @@ function EngiconnectDashboardContent() {
         let meetingRoomUnsub: (() => void) | undefined
         setupMeetingRoomListener().then(u => { meetingRoomUnsub = u })
         return () => { unsubSite(); unsubShop(); unsubTesting(); unsubJob(); unsubOther(); unsubDialux(); supabase.removeChannel(ch); if (meetingRoomUnsub) meetingRoomUnsub() }
-    }, [userId, subordinateIds])
+    }, [userId, subordinateIds, userDept, userRole])
 
     useEffect(() => {
         const total = Object.values(notifications.unreadByService).reduce((a, b) => a + b, 0)

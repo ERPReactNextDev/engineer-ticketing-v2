@@ -11,13 +11,15 @@ import { toast } from "sonner"
 import {
     Database, Search, X, RefreshCw, ChevronDown, ChevronRight,
     Copy, Download, Plus, Trash2, FolderOpen, FileJson, Wand2, Upload,
+    Edit2, Save, MoreVertical, Check, XCircle,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ImportDialogModal } from "@/components/import-dialog-modal"
 
 import { db, logsDb } from "@/lib/firebase"
 import {
     collection, collectionGroup, getDocs, query, limit, startAfter,
-    doc, writeBatch,
+    doc, writeBatch, updateDoc,
     Timestamp, GeoPoint, DocumentReference,
     type QueryDocumentSnapshot, type QuerySnapshot, type Query,
     type DocumentData, type Firestore,
@@ -246,8 +248,6 @@ function JsonBlock({ data, open, onReveal }: { data: any; open: boolean; onRevea
 }
 
 /* ─────────────── IMPORT ─────────────── */
-type ImportOp = { path: string; data: any; auto?: boolean }
-
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/
 const isDocPath = (s: string) => s.includes("/") && s.split("/").length % 2 === 0
 const isPlainObj = (v: any) => !!v && typeof v === "object" && !Array.isArray(v)
@@ -269,232 +269,6 @@ function revive(value: any, firestore: Firestore): any {
     if (Array.isArray(value)) return value.map(v => revive(v, firestore))
     if (isPlainObj(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, revive(v, firestore)]))
     return value
-}
-
-/**
- * Supported JSON shapes:
- *  1) { "col/docId": {...}, "col/docId/sub/id": {...} }   ← the format of the JSON download button
- *  2) { "docId": {...}, "docId2": {...} }                  → saved into the target collection
- *  3) [ {...}, {...} ]  (uses item.path or item.id if present, else auto ID) → target collection
- *  4) { ...fields }  single document → target collection, auto ID
- */
-function parseImport(json: any, fileName: string, targetCol: string): ImportOp[] {
-    const col = trimSlashes(targetCol) || fileName.replace(/\.json$/i, "")
-    if (col.split("/").length % 2 === 0) throw new Error(`Invalid target collection "${col}"`)
-
-    const fromItem = (item: any): ImportOp => {
-        if (!isPlainObj(item)) throw new Error("Array items must be objects")
-        const { path, ...rest } = item
-        if (typeof path === "string" && isDocPath(trimSlashes(path))) {
-            return { path: trimSlashes(path), data: rest }
-        }
-        if (typeof item.id === "string" && item.id && !item.id.includes("/")) {
-            return { path: `${col}/${item.id}`, data: item }
-        }
-        return { path: col, data: item, auto: true }
-    }
-
-    if (Array.isArray(json)) return json.map(fromItem)
-    if (!isPlainObj(json)) throw new Error("JSON must be an object or an array")
-
-    const entries = Object.entries(json)
-    if (entries.length === 0) return []
-
-    if (entries.every(([k, v]) => isDocPath(trimSlashes(k)) && isPlainObj(v))) {
-        return entries.map(([k, v]) => ({ path: trimSlashes(k), data: v }))
-    }
-    if (entries.every(([k, v]) => !k.includes("/") && isPlainObj(v))) {
-        return entries.map(([k, v]) => ({ path: `${col}/${k}`, data: v }))
-    }
-    return [{ path: col, data: json, auto: true }]
-}
-
-function ImportDialog({
-    open, onOpenChange, firestore, dbLabel, defaultCollection, onDone,
-}: {
-    open: boolean
-    onOpenChange: (o: boolean) => void
-    firestore: Firestore
-    dbLabel: string
-    defaultCollection: string
-    onDone: (collectionIds: string[]) => void
-}) {
-    const inputRef = React.useRef<HTMLInputElement>(null)
-    const [targetCol, setTargetCol] = React.useState(defaultCollection)
-    const [raw, setRaw] = React.useState<{ name: string; json?: any; error?: string }[]>([])
-    const [merge, setMerge] = React.useState(true)
-    const [restore, setRestore] = React.useState(true)
-    const [importing, setImporting] = React.useState(false)
-    const [progress, setProgress] = React.useState(0)
-
-    React.useEffect(() => {
-        if (open) {
-            setTargetCol(defaultCollection.includes("/") ? "" : defaultCollection)
-            setRaw([])
-            setProgress(0)
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open])
-
-    const readFiles = async (list: FileList | null) => {
-        if (!list) return
-        const out: typeof raw = []
-        for (const f of Array.from(list)) {
-            try {
-                out.push({ name: f.name, json: JSON.parse(await f.text()) })
-            } catch {
-                out.push({ name: f.name, error: "Not valid JSON" })
-            }
-        }
-        setRaw(prev => [...prev, ...out])
-        if (inputRef.current) inputRef.current.value = ""
-    }
-
-    const parsed = React.useMemo(
-        () => raw.map(f => {
-            if (f.error) return { name: f.name, ops: [] as ImportOp[], error: f.error }
-            try { return { name: f.name, ops: parseImport(f.json, f.name, targetCol), error: undefined as string | undefined } }
-            catch (e: any) { return { name: f.name, ops: [] as ImportOp[], error: e.message as string } }
-        }),
-        [raw, targetCol]
-    )
-    const allOps = React.useMemo(() => parsed.flatMap(p => p.ops), [parsed])
-
-    const run = async () => {
-        if (!allOps.length) return
-        setImporting(true)
-        setProgress(0)
-        let done = 0
-        try {
-            for (let i = 0; i < allOps.length; i += 400) {
-                const chunk = allOps.slice(i, i + 400)
-                const batch = writeBatch(firestore)
-                for (const op of chunk) {
-                    const ref = op.auto ? doc(collection(firestore, op.path)) : doc(firestore, op.path)
-                    const data = restore ? revive(op.data, firestore) : op.data
-                    merge ? batch.set(ref, data, { merge: true }) : batch.set(ref, data)
-                }
-                await batch.commit()
-                done += chunk.length
-                setProgress(done)
-            }
-            const ids = new Set<string>()
-            allOps.forEach(op => {
-                const segs = op.path.split("/")
-                for (let i = 0; i < segs.length; i += 2) ids.add(segs[i])
-            })
-            toast.success(`Imported ${done.toLocaleString()} document${done > 1 ? "s" : ""}`)
-            onDone(Array.from(ids))
-            onOpenChange(false)
-        } catch (e: any) {
-            console.error(e)
-            toast.error(
-                (e?.code === "permission-denied" ? "Write blocked by Firestore rules." : `Import failed: ${e?.message || "unknown error"}`) +
-                (done ? ` (${done.toLocaleString()} already saved)` : "")
-            )
-        } finally {
-            setImporting(false)
-        }
-    }
-
-    return (
-        <Dialog open={open} onOpenChange={o => !importing && onOpenChange(o)}>
-            <DialogContent className="max-w-xl max-h-[85vh] overflow-y-auto rounded-[28px] border-none shadow-2xl bg-white">
-                <DialogHeader>
-                    <DialogTitle className="text-[18px] font-black text-zinc-900">Import JSON to Firebase</DialogTitle>
-                </DialogHeader>
-
-                <div className="space-y-4">
-                    <p className="text-[11px] font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
-                        This WRITES to the live database: <span className="uppercase">{dbLabel}</span>. Export a backup first.
-                    </p>
-
-                    <div>
-                        <input
-                            ref={inputRef}
-                            type="file"
-                            multiple
-                            accept=".json,application/json"
-                            onChange={e => readFiles(e.target.files)}
-                            className="hidden"
-                        />
-                        <Button variant="outline" className="rounded-xl w-full h-11 text-[12px] font-bold"
-                            onClick={() => inputRef.current?.click()} disabled={importing}>
-                            <Upload className="size-4 mr-2" /> Choose JSON file(s)
-                        </Button>
-                    </div>
-
-                    <div>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 mb-1">
-                            Target collection (only for files without full paths)
-                        </p>
-                        <input
-                            value={targetCol}
-                            onChange={e => setTargetCol(e.target.value)}
-                            placeholder="e.g. job_requests"
-                            disabled={importing}
-                            className="w-full h-9 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-[12px] font-medium outline-none focus:bg-white focus:border-zinc-400"
-                        />
-                    </div>
-
-                    {parsed.length > 0 && (
-                        <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                            {parsed.map((p, i) => (
-                                <div key={i} className="flex items-center gap-2 text-[11px] border border-zinc-200 rounded-xl px-3 py-2">
-                                    <FileJson className="size-3.5 shrink-0 text-zinc-400" />
-                                    <span className="font-bold truncate flex-1">{p.name}</span>
-                                    {p.error
-                                        ? <span className="text-rose-600 font-bold shrink-0">{p.error}</span>
-                                        : <span className="text-zinc-500 font-bold shrink-0">{p.ops.length.toLocaleString()} docs</span>}
-                                    <button onClick={() => setRaw(prev => prev.filter((_, j) => j !== i))}
-                                        disabled={importing} className="text-zinc-400 hover:text-rose-600">
-                                        <X className="size-3.5" />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {allOps.length > 0 && (
-                        <p className="text-[10px] font-bold text-zinc-500 break-all">
-                            Sample: {allOps.slice(0, 3).map(o => `/${o.path}${o.auto ? "/(auto id)" : ""}`).join(", ")}
-                            {allOps.length > 3 ? ` … +${allOps.length - 3} more` : ""}
-                        </p>
-                    )}
-
-                    <div className="space-y-2 text-[12px] font-bold text-zinc-700">
-                        <label className="flex items-start gap-2 cursor-pointer">
-                            <input type="checkbox" checked={merge} onChange={e => setMerge(e.target.checked)} disabled={importing} className="mt-0.5" />
-                            <span>Merge into existing docs
-                                <span className="block text-[10px] font-medium text-zinc-400">Off = replace the whole document if it already exists.</span>
-                            </span>
-                        </label>
-                        <label className="flex items-start gap-2 cursor-pointer">
-                            <input type="checkbox" checked={restore} onChange={e => setRestore(e.target.checked)} disabled={importing} className="mt-0.5" />
-                            <span>Restore dates &amp; references
-                                <span className="block text-[10px] font-medium text-zinc-400">ISO date strings → Timestamp, "ref:path" → document reference.</span>
-                            </span>
-                        </label>
-                    </div>
-
-                    {importing && (
-                        <div className="h-1.5 w-full bg-zinc-100 rounded-full overflow-hidden">
-                            <div className="h-full bg-zinc-900 transition-all" style={{ width: `${allOps.length ? (progress / allOps.length) * 100 : 0}%` }} />
-                        </div>
-                    )}
-
-                    <div className="flex justify-end gap-2 pt-1">
-                        <Button variant="outline" className="rounded-xl" onClick={() => onOpenChange(false)} disabled={importing}>Cancel</Button>
-                        <Button className="rounded-xl bg-zinc-900 hover:bg-zinc-800 text-white" onClick={run} disabled={!allOps.length || importing}>
-                            {importing
-                                ? <><RefreshCw className="size-3.5 mr-1.5 animate-spin" />{progress.toLocaleString()} / {allOps.length.toLocaleString()}</>
-                                : <><Upload className="size-3.5 mr-1.5" />Import {allOps.length.toLocaleString()} docs</>}
-                        </Button>
-                    </div>
-                </div>
-            </DialogContent>
-        </Dialog>
-    )
 }
 
 /* ─────────────── Page ─────────────── */
@@ -523,6 +297,11 @@ export default function DatabaseFetchingPage() {
     const [search, setSearch] = React.useState("")
     // Rows are EXPANDED by default; this tracks the ones the user collapsed
     const [collapsed, setCollapsed] = React.useState<Set<string>>(new Set())
+
+    // Edit state
+    const [editingDoc, setEditingDoc] = React.useState<string | null>(null)
+    const [editingFields, setEditingFields] = React.useState<Record<string, any>>({})
+    const [saving, setSaving] = React.useState(false)
 
     React.useEffect(() => {
         setUserId(localStorage.getItem("userId"))
@@ -746,6 +525,62 @@ export default function DatabaseFetchingPage() {
             next.has(path) ? next.delete(path) : next.add(path)
             return next
         })
+
+    const startEditing = (path: string, data: any) => {
+        setEditingDoc(path)
+        setEditingFields(JSON.parse(JSON.stringify(data)))
+    }
+
+    const cancelEditing = () => {
+        setEditingDoc(null)
+        setEditingFields({})
+    }
+
+    const saveChanges = async () => {
+        if (!editingDoc) return
+        setSaving(true)
+        try {
+            const firestore = DBS[dbKey].instance
+            const docRef = doc(firestore, editingDoc)
+            const revivedData = revive(editingFields, firestore)
+            await updateDoc(docRef, revivedData)
+            toast.success("Document updated successfully")
+            setEditingDoc(null)
+            setEditingFields({})
+            // Refresh the data
+            setRows([])
+            if (selected) fetchAll(selected)
+        } catch (e: any) {
+            console.error(e)
+            toast.error(`Failed to save: ${e?.message || "unknown error"}`)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const updateField = (key: string, value: any) => {
+        setEditingFields(prev => ({ ...prev, [key]: value }))
+    }
+
+    const deleteField = (key: string) => {
+        setEditingFields(prev => {
+            const { [key]: _, ...rest } = prev
+            return rest
+        })
+    }
+
+    const addField = () => {
+        const newKey = `new_field_${Object.keys(editingFields).length + 1}`
+        setEditingFields(prev => ({ ...prev, [newKey]: "" }))
+    }
+
+    const renameField = (oldKey: string, newKey: string) => {
+        if (!newKey || newKey === oldKey) return
+        setEditingFields(prev => {
+            const { [oldKey]: value, ...rest } = prev
+            return { ...rest, [newKey]: value }
+        })
+    }
 
     const copyJson = async (data: any) => {
         try {
@@ -976,7 +811,7 @@ export default function DatabaseFetchingPage() {
                                                 <Download className="size-3.5 mr-1" /> JSON
                                             </Button>
                                             <Button variant="outline" size="sm" className="h-9 rounded-xl text-[11px] font-bold"
-                                                onClick={() => { setRows([]); fetchAll(selected) }}
+                                                onClick={() => { setRows([]); if (selected) fetchAll(selected) }}
                                                 disabled={loading}>
                                                 <RefreshCw className={cn("size-3.5 mr-1", loading && "animate-spin")} /> Refresh
                                             </Button>
@@ -991,12 +826,16 @@ export default function DatabaseFetchingPage() {
 
                                             {filteredRows.map(row => {
                                                 const isOpen = !collapsed.has(row.path)
-                                                const entries = Object.entries(row.data || {})
+                                                const isEditing = editingDoc === row.path
+                                                const entries = Object.entries(isEditing ? editingFields : (row.data || {}))
                                                 return (
                                                     <div key={row.path} className="border border-zinc-200 rounded-xl overflow-hidden">
                                                         <div
-                                                            className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-zinc-50"
-                                                            onClick={() => toggleExpand(row.path)}
+                                                            className={cn(
+                                                                "flex items-center gap-3 px-4 py-3",
+                                                                !isEditing && "cursor-pointer hover:bg-zinc-50"
+                                                            )}
+                                                            onClick={() => !isEditing && toggleExpand(row.path)}
                                                         >
                                                             {isOpen
                                                                 ? <ChevronDown className="size-4 text-zinc-400 shrink-0" />
@@ -1012,24 +851,109 @@ export default function DatabaseFetchingPage() {
                                                             <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400 shrink-0">
                                                                 {entries.length} fields
                                                             </span>
-                                                            <button
-                                                                onClick={e => { e.stopPropagation(); copyJson({ path: row.path, ...row.data }) }}
-                                                                className="text-zinc-400 hover:text-zinc-800 shrink-0"
-                                                                title="Copy JSON"
-                                                            >
-                                                                <Copy className="size-3.5" />
-                                                            </button>
+                                                            {isEditing ? (
+                                                                <div className="flex items-center gap-1">
+                                                                    <button
+                                                                        onClick={e => { e.stopPropagation(); saveChanges() }}
+                                                                        disabled={saving}
+                                                                        className="text-emerald-600 hover:text-emerald-700 shrink-0"
+                                                                        title="Save changes"
+                                                                    >
+                                                                        {saving ? <RefreshCw className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={e => { e.stopPropagation(); cancelEditing() }}
+                                                                        disabled={saving}
+                                                                        className="text-rose-600 hover:text-rose-700 shrink-0"
+                                                                        title="Cancel editing"
+                                                                    >
+                                                                        <XCircle className="size-3.5" />
+                                                                    </button>
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <button
+                                                                        onClick={e => { e.stopPropagation(); startEditing(row.path, row.data) }}
+                                                                        className="text-zinc-400 hover:text-zinc-800 shrink-0"
+                                                                        title="Edit document"
+                                                                    >
+                                                                        <Edit2 className="size-3.5" />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={e => { e.stopPropagation(); copyJson({ path: row.path, ...row.data }) }}
+                                                                        className="text-zinc-400 hover:text-zinc-800 shrink-0"
+                                                                        title="Copy JSON"
+                                                                    >
+                                                                        <Copy className="size-3.5" />
+                                                                    </button>
+                                                                </>
+                                                            )}
                                                         </div>
-                                                        <JsonBlock
-                                                            data={row.data}
-                                                            open={isOpen}
-                                                            onReveal={() => setCollapsed(prev => {
-                                                                if (!prev.has(row.path)) return prev
-                                                                const next = new Set(prev)
-                                                                next.delete(row.path)
-                                                                return next
-                                                            })}
-                                                        />
+                                                        {isOpen && (
+                                                            <div className="border-t border-zinc-100">
+                                                                {isEditing ? (
+                                                                    <div className="p-4 space-y-2 bg-zinc-50">
+                                                                        {entries.map(([key, value]) => (
+                                                                            <div key={key} className="flex items-start gap-2 group">
+                                                                                <input
+                                                                                    type="text"
+                                                                                    value={key}
+                                                                                    onChange={e => renameField(key, e.target.value)}
+                                                                                    className="w-32 h-8 px-2 rounded-lg bg-white border border-zinc-200 text-[11px] font-medium text-zinc-900 outline-none focus:border-zinc-400"
+                                                                                />
+                                                                                <span className="text-[9px] font-bold text-zinc-400 uppercase mt-2">
+                                                    ({typeof value})
+                                                </span>
+                                                                                <input
+                                                                                    type="text"
+                                                                                    value={typeof value === "object" ? JSON.stringify(value) : String(value)}
+                                                                                    onChange={e => {
+                                                                                        let newValue: any = e.target.value
+                                                                                        if (typeof value === "number") {
+                                                                                            newValue = parseFloat(newValue) || 0
+                                                                                        } else if (typeof value === "boolean") {
+                                                                                            newValue = newValue.toLowerCase() === "true"
+                                                                                        } else if (typeof value === "object" && value !== null) {
+                                                                                            try {
+                                                                                                newValue = JSON.parse(newValue)
+                                                                                            } catch {
+                                                                                                // Keep as string if invalid JSON
+                                                                                            }
+                                                                                        }
+                                                                                        updateField(key, newValue)
+                                                                                    }}
+                                                                                    className="flex-1 h-8 px-2 rounded-lg bg-white border border-zinc-200 text-[11px] font-medium text-zinc-900 outline-none focus:border-zinc-400"
+                                                                                />
+                                                                                <button
+                                                                                    onClick={() => deleteField(key)}
+                                                                                    className="text-zinc-300 hover:text-rose-600 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                                                    title="Delete field"
+                                                                                >
+                                                                                    <Trash2 className="size-3.5" />
+                                                                                </button>
+                                                                            </div>
+                                                                        ))}
+                                                                        <button
+                                                                            onClick={addField}
+                                                                            className="w-full h-8 rounded-lg border border-dashed border-zinc-300 text-[11px] font-bold text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 flex items-center justify-center gap-1"
+                                                                        >
+                                                                            <Plus className="size-3" /> Add field
+                                                                        </button>
+                                                                    </div>
+                                                                ) : (
+                                                                    <JsonBlock
+                                                                        data={row.data}
+                                                                        open={isOpen}
+                                                                        onReveal={() => setCollapsed(prev => {
+                                                                            if (!prev.has(row.path)) return prev
+                                                                            const next = new Set(prev)
+                                                                            next.delete(row.path)
+                                                                            return next
+                                                                        })}
+                                                                    />
+                                                                )}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 )
                                             })}
@@ -1049,7 +973,7 @@ export default function DatabaseFetchingPage() {
                             </section>
                         </div>
 
-                        <ImportDialog
+                        <ImportDialogModal
                             open={importOpen}
                             onOpenChange={setImportOpen}
                             firestore={DBS[dbKey].instance}

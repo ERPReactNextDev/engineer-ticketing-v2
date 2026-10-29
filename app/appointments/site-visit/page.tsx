@@ -341,7 +341,7 @@ function CalendarView({ visits, currentMonth, onMonthChange, router, staffNames 
 /* ─────────────────────────────────────────────
    INSIGHTS COMPONENTS
 ───────────────────────────────────────────── */
-function RoleInsights({ user, visits, staffNames, setShowGuide, subordinateIds }: any) {
+function RoleInsights({ user, visits, staffNames, setShowGuide, subordinateIds, subordinateReferenceIds }: any) {
   const isManager = user.role === "MANAGER"
   const isTSM = user.role === "TSM"
   const isIT = user.dept === "IT"
@@ -353,8 +353,8 @@ function RoleInsights({ user, visits, staffNames, setShowGuide, subordinateIds }
     return isWithinInterval(d, { start: new Date(), end: addDays(new Date(), 2) }) && v.status !== "COMPLETED"
   })
 
-  const myPending = visits.filter((v: any) => v.status === "PENDING" && v.submittedBy === user.id)
-  const teamPending = visits.filter((v: any) => v.status === "PENDING" && subordinateIds?.includes(v.submittedBy))
+  const myPending = visits.filter((v: any) => v.status === "PENDING" && (v.submittedBy === user.id || v.submittedBy === user.refId))
+  const teamPending = visits.filter((v: any) => v.status === "PENDING" && (subordinateIds?.includes(v.submittedBy) || subordinateReferenceIds?.includes(v.submittedBy)))
 
   const completionRate = visits.length > 0 
     ? (visits.filter((v: any) => v.status === "COMPLETED").length / visits.length) * 100 
@@ -468,7 +468,8 @@ export default function SiteVisitListPage() {
   const [isUserLoading, setIsUserLoading] = React.useState(true)
   const [visits, setVisits] = React.useState<any[]>([])
   const [subordinateIds, setSubordinateIds] = React.useState<string[]>([])
-  const [subordinateDetails, setSubordinateDetails] = React.useState<{id: string, name: string, role: string}[]>([])
+  const [subordinateReferenceIds, setSubordinateReferenceIds] = React.useState<string[]>([])
+  const [subordinateDetails, setSubordinateDetails] = React.useState<{id: string, referenceId: string, name: string, role: string}[]>([])
   const [selectedMemberId, setSelectedMemberId] = React.useState<string | null>(null)
   const [isDataLoading, setIsDataLoading] = React.useState(true)
   const [selectedStatus, setSelectedStatus] = React.useState<string | null>(null)
@@ -494,7 +495,7 @@ export default function SiteVisitListPage() {
     const subordinate = subordinateDetails.find(s => s.id === userId)
     if (subordinate) return subordinate.name
     // Check all staff from MongoDB by _id
-    const staffById = allStaff.find(s => s._id === userId)
+    const staffById = allStaff.find(s => s._id === userId || s.id === userId || s.UserId === userId)
     if (staffById) return `${staffById.Firstname || ""} ${staffById.Lastname || ""}`.trim()
     // Check all staff by ReferenceID (for TSM/Manager fields)
     const staffByRef = allStaff.find(s => s.ReferenceID === userId)
@@ -611,11 +612,17 @@ export default function SiteVisitListPage() {
               return hasManagerAssigned
             })
           }
-          setSubordinateIds(subs.map(u => u._id))
-          setSubordinateDetails(subs.map(u => ({ 
-            id: u._id, 
-            name: `${u.Firstname || ""} ${u.Lastname || ""}`.trim(),
-            role: u.Role || "TSA"
+          const validSubordinates = subs
+            .map(u => ({ user: u, id: u._id ?? u.UserId ?? u.id }))
+            .filter(({ id }) => id !== null && id !== undefined && String(id).trim() !== "")
+            .map(({ user, id }) => ({ user, id: String(id) }))
+          setSubordinateIds(validSubordinates.map(({ id }) => id))
+          setSubordinateReferenceIds(validSubordinates.map(({ user }) => user.ReferenceID).filter(Boolean))
+          setSubordinateDetails(validSubordinates.map(({ user, id }) => ({
+            id,
+            referenceId: user.ReferenceID || "",
+            name: `${user.Firstname || ""} ${user.Lastname || ""}`.trim(),
+            role: user.Role || "TSA"
           })))
         }
       } catch (error) { 
@@ -680,12 +687,18 @@ export default function SiteVisitListPage() {
 
     // FIX: Apply server-side where filter for non-admin users
     let q;
+    const ownSubmitterIds = [user.id, user.refId].filter(Boolean) as string[];
+    const teamSubmitterIds = Array.from(new Set([
+      ...ownSubmitterIds,
+      ...subordinateIds,
+      ...subordinateReferenceIds
+    ].filter(Boolean))).slice(0, 30);
     if (hasGlobalAccess) {
       q = query(baseCollection, orderBy("createdAt", "desc"));
-    } else if ((isTSM || isManager) && subordinateIds.length > 0) {
-      q = query(baseCollection, where("submittedBy", "in", [user.id, ...subordinateIds.slice(0, 9)]), orderBy("createdAt", "desc"));
+    } else if ((isTSM || isManager) && (subordinateIds.length > 0 || subordinateReferenceIds.length > 0)) {
+      q = query(baseCollection, where("submittedBy", "in", teamSubmitterIds), orderBy("createdAt", "desc"));
     } else {
-      q = query(baseCollection, where("submittedBy", "==", user.id), orderBy("createdAt", "desc"));
+      q = query(baseCollection, where("submittedBy", "in", ownSubmitterIds), orderBy("createdAt", "desc"));
     }
 
     const unsubscribe = onSnapshot(q, (snapshot: any) => {
@@ -694,7 +707,7 @@ export default function SiteVisitListPage() {
         const rawDate = data.appointmentDate?.toDate ? data.appointmentDate.toDate() : new Date()
         
         // Look up TSA in allStaff to get their details including TSM and Manager
-        const tsaUser = allStaff.find(u => u._id === data.submittedBy || u.UserId === data.submittedBy)
+        const tsaUser = allStaff.find(u => u._id === data.submittedBy || u.UserId === data.submittedBy || u.id === data.submittedBy || u.ReferenceID === data.submittedBy)
         const tsaName = tsaUser ? `${tsaUser.Firstname || ""} ${tsaUser.Lastname || ""}`.trim() : (data.submittedByName || data.tsaName)
         
         // Get TSM and Manager ReferenceIDs from TSA's record
@@ -724,6 +737,7 @@ export default function SiteVisitListPage() {
           rawProtocols: data.protocols,
           type: resolveProtocolNames(data.protocols),
           submittedBy: data.submittedBy,
+          submittedByUserId: tsaUser?._id || tsaUser?.UserId || tsaUser?.id,
           submittedByRole: data.submittedByRole,
           submittedByName: tsaName,
           tsaName: tsaName,
@@ -740,12 +754,13 @@ export default function SiteVisitListPage() {
         if (isTSM || isManager) {
             // TSM and MANAGER can see their own AND all their subordinate visits
             liveData = liveData.filter((v: any) => {
-                const match = v.submittedBy === user.id || subordinateIds.includes(v.submittedBy);
+                const match = v.submittedBy === user.id || v.submittedBy === user.refId ||
+                  subordinateIds.includes(v.submittedBy) || subordinateReferenceIds.includes(v.submittedBy);
                 return match;
             });
         } else {
             // TSA and other Members ONLY see their own visits
-            liveData = liveData.filter((v: any) => v.submittedBy === user.id);
+            liveData = liveData.filter((v: any) => v.submittedBy === user.id || v.submittedBy === user.refId);
         }
       }
       
@@ -757,17 +772,22 @@ export default function SiteVisitListPage() {
     })
 
     return () => unsubscribe()
-  }, [user, isUserLoading, subordinateIds])
+  }, [user, isUserLoading, subordinateIds, subordinateReferenceIds])
 
   const filteredVisits = React.useMemo(() => {
     return visits.filter((v: any) => {
       const s = `${v.site} ${v.id} ${v.tech} ${v.type} ${v.siteVisitNo || ""}`.toLowerCase()
       const matchesSearch = s.includes(searchQuery.toLowerCase())
       const matchesStatus = selectedStatus ? v.status === selectedStatus : true
-      const matchesMember = selectedMemberId ? v.submittedBy === selectedMemberId : true
+      const selectedMember = subordinateDetails.find(sub => sub.id === selectedMemberId)
+      const matchesMember = selectedMemberId
+        ? v.submittedBy === selectedMemberId ||
+          v.submittedBy === selectedMember?.referenceId ||
+          v.submittedByUserId === selectedMemberId
+        : true
       return matchesSearch && matchesStatus && matchesMember
     })
-  }, [visits, searchQuery, selectedStatus, selectedMemberId])
+  }, [visits, searchQuery, selectedStatus, selectedMemberId, subordinateDetails])
 
   // Re-resolve protocol names when allProtocols is loaded/updated
   React.useEffect(() => {
@@ -835,7 +855,7 @@ export default function SiteVisitListPage() {
             
             {/* ── ROLE-SPECIFIC INSIGHTS ── */}
             {!isUserLoading && (
-              <RoleInsights user={user} visits={visits} staffNames={staffNames} setShowGuide={setShowGuide} subordinateIds={subordinateIds} />
+              <RoleInsights user={user} visits={visits} staffNames={staffNames} setShowGuide={setShowGuide} subordinateIds={subordinateIds} subordinateReferenceIds={subordinateReferenceIds} />
             )}
 
             {/* ── MANAGEMENT DASHBOARD (Collapsible) ── */}

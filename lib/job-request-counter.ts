@@ -1,233 +1,235 @@
-import { db } from "@/lib/firebase";
-import {
-  doc,
-  runTransaction,
-  serverTimestamp,
-  getDoc,
-  setDoc,
-  updateDoc,
-  collection,
-  query,
-  where,
-  getDocs,
-  limit,
-  deleteDoc,
-  Timestamp,
-} from "firebase/firestore";
+import { createClient } from "@supabase/supabase-js";
 
-const COUNTER_DOC_ID = "job_requests";
 const STARTING_NUMBER = 42;
 const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 100;
-
-// Reserved numbers expire after 5 minutes (prevents stuck numbers if save fails)
 const RESERVATION_EXPIRY_MINUTES = 5;
 
-/**
- * Reserve a number temporarily to prevent collisions during high traffic
- */
-async function reserveNumber(number: string, isTest: boolean): Promise<boolean> {
+const memoryCounters = new Map<string, number>();
+const memoryReservations = new Map<string, number>();
+
+function getSupabaseClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL_TICKET || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY || "";
+
+  if (!url || !key) return null;
+
+  return createClient(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
+async function getCounterRow(isTest: boolean) {
+  const currentYear = new Date().getFullYear();
+  const counterId = isTest ? "job_requests_test" : "job_requests";
+  const client = getSupabaseClient();
+
+  if (!client) {
+    const key = `${counterId}:${currentYear}`;
+    return {
+      current_number: memoryCounters.get(key) ?? (isTest ? 0 : STARTING_NUMBER - 1),
+      year: currentYear,
+      type: isTest ? "test" : "production",
+    };
+  }
+
   try {
-    const reservationRef = doc(db, "counters", "reserved_numbers", "numbers", number);
-    const now = Timestamp.now();
-    
-    await setDoc(reservationRef, {
-      number,
-      isTest,
-      reservedAt: now,
-      expiresAt: Timestamp.fromMillis(now.toMillis() + RESERVATION_EXPIRY_MINUTES * 60 * 1000),
-    });
+    const { data, error } = await client.from("job_request_counters").select("*").eq("id", counterId).maybeSingle();
+    if (error && (error as any).code !== "42P01") throw error;
+    return data || { current_number: isTest ? 0 : STARTING_NUMBER - 1, year: currentYear, type: isTest ? "test" : "production" };
+  } catch (error) {
+    const key = `${counterId}:${currentYear}`;
+    return {
+      current_number: memoryCounters.get(key) ?? (isTest ? 0 : STARTING_NUMBER - 1),
+      year: currentYear,
+      type: isTest ? "test" : "production",
+    };
+  }
+}
+
+async function persistCounterRow(isTest: boolean, next: number, currentYear: number) {
+  const client = getSupabaseClient();
+  const counterId = isTest ? "job_requests_test" : "job_requests";
+
+  if (!client) {
+    memoryCounters.set(`${counterId}:${currentYear}`, next);
+    return;
+  }
+
+  try {
+    const { error } = await client.from("job_request_counters").upsert(
+      { id: counterId, current_number: next, year: currentYear, type: isTest ? "test" : "production", last_updated_at: new Date().toISOString() },
+      { onConflict: "id" }
+    );
+
+    if (error && (error as any).code === "42P01") {
+      memoryCounters.set(`${counterId}:${currentYear}`, next);
+      return;
+    }
+
+    if (error) throw error;
+  } catch (error) {
+    memoryCounters.set(`${counterId}:${currentYear}`, next);
+  }
+}
+
+async function reserveNumber(number: string, isTest: boolean): Promise<boolean> {
+  const client = getSupabaseClient();
+  const reservationKey = `${isTest ? "test-" : "prod-"}${number}`;
+  const expiresAt = Date.now() + RESERVATION_EXPIRY_MINUTES * 60 * 1000;
+
+  if (!client) {
+    memoryReservations.set(reservationKey, expiresAt);
+    return true;
+  }
+
+  try {
+    const { error } = await client.from("job_request_number_reservations").upsert(
+      {
+        number,
+        is_test: isTest,
+        reserved_at: new Date().toISOString(),
+        expires_at: new Date(expiresAt).toISOString(),
+      },
+      { onConflict: "number" }
+    );
+
+    if (error && (error as any).code === "42P01") {
+      memoryReservations.set(reservationKey, expiresAt);
+      return true;
+    }
+
+    if (error) throw error;
     return true;
   } catch (error) {
-    console.error("Failed to reserve number:", error);
-    return false;
+    console.warn("Fallback reservation used for job request counter:", error);
+    memoryReservations.set(reservationKey, expiresAt);
+    return true;
   }
 }
 
-/**
- * Release a reserved number after successful save
- */
 export async function releaseReservedNumber(number: string): Promise<void> {
+  const client = getSupabaseClient();
+  const reservationKey = `prod-${number}`;
+
+  if (!client) {
+    memoryReservations.delete(reservationKey);
+    memoryReservations.delete(`test-${number}`);
+    return;
+  }
+
   try {
-    const reservationRef = doc(db, "counters", "reserved_numbers", "numbers", number);
-    await deleteDoc(reservationRef);
+    const { error } = await client.from("job_request_number_reservations").delete().eq("number", number);
+    if (error && (error as any).code !== "42P01") {
+      throw error;
+    }
   } catch (error) {
-    // Silent fail - reservation will expire automatically
-    console.warn("Failed to release reservation (will auto-expire):", error);
+    memoryReservations.delete(reservationKey);
+    memoryReservations.delete(`test-${number}`);
   }
 }
 
-/**
- * Check if a number is currently reserved
- */
 async function isNumberReserved(number: string): Promise<boolean> {
-  try {
-    const reservationRef = doc(db, "counters", "reserved_numbers", "numbers", number);
-    const snap = await getDoc(reservationRef);
-    if (!snap.exists()) return false;
-    
-    const data = snap.data();
-    const now = Timestamp.now();
-    
-    // Check if reservation has expired
-    if (data.expiresAt && data.expiresAt.toMillis() < now.toMillis()) {
-      // Clean up expired reservation
-      await deleteDoc(reservationRef);
+  const client = getSupabaseClient();
+  const reservationKey = `prod-${number}`;
+
+  if (!client) {
+    const value = memoryReservations.get(reservationKey) ?? memoryReservations.get(`test-${number}`);
+    if (!value) return false;
+    if (value < Date.now()) {
+      memoryReservations.delete(reservationKey);
+      memoryReservations.delete(`test-${number}`);
       return false;
     }
-    
+    return true;
+  }
+
+  try {
+    const { data, error } = await client.from("job_request_number_reservations").select("*").eq("number", number).maybeSingle();
+    if (error && (error as any).code === "42P01") return false;
+    if (!data) return false;
+    const expiry = data.expires_at ? new Date(data.expires_at).getTime() : 0;
+    if (expiry < Date.now()) {
+      await client.from("job_request_number_reservations").delete().eq("number", number);
+      return false;
+    }
     return true;
   } catch (error) {
-    console.error("Error checking reservation:", error);
     return false;
   }
 }
 
-/**
- * Generate the next sequential job request number with high-concurrency protection
- * Format: JR-YYYY-#### (e.g., JR-2026-0042)
- * Resets to 0001 when new year starts
- *
- * @param isTest - If true, generates a test number (prefixes with TEST- and uses separate counter)
- * @returns The formatted job request number
- */
-export async function getNextJobRequestNumber(
-  isTest: boolean = false
-): Promise<string> {
+export async function isJobRequestNumberExists(jobRequestNo: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    const { data, error } = await client.from("job_requests").select("id").eq("job_request_no", jobRequestNo).limit(1).maybeSingle();
+    if (error && (error as any).code === "42P01") return false;
+    return !!data;
+  } catch (error) {
+    return false;
+  }
+}
+
+export async function getNextJobRequestNumber(isTest: boolean = false): Promise<string> {
   const currentYear = new Date().getFullYear();
   const prefix = isTest ? `TEST-JR-${currentYear}-` : `JR-${currentYear}-`;
-  
   let lastError: Error | null = null;
 
-  // Retry loop for collision handling
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const counterRef = doc(db, "counters", isTest ? "job_requests_test" : COUNTER_DOC_ID);
+      const counter = await getCounterRow(isTest);
+      let next = (counter.current_number ?? 0) + 1;
+      if (counter.year !== currentYear) {
+        next = isTest ? 1 : STARTING_NUMBER;
+      }
 
-      // Use transaction for atomic counter increment
-      const nextNum = await runTransaction(db, async (transaction) => {
-        const counterSnap = await transaction.get(counterRef);
-        
-        const counterYear = counterSnap.exists() ? counterSnap.data().year : null;
-        
-        let current: number;
-        let next: number;
-        
-        // Check if year has changed - reset counter if new year
-        if (counterSnap.exists() && counterYear === currentYear) {
-          // Same year, continue from current
-          if (isTest) {
-            current = counterSnap.data().currentNumber || 0;
-          } else {
-            current = counterSnap.data().currentNumber || STARTING_NUMBER - 1;
-          }
-          next = current + 1;
-        } else {
-          // New year or first time - start from beginning
-          next = isTest ? 1 : STARTING_NUMBER;
-        }
-        
-        // Double-check this number isn't already used in job_requests
-        const checkRef = collection(db, "job_requests");
-        const checkQuery = query(
-          checkRef, 
-          where("jobRequestNo", "==", `${prefix}${String(next).padStart(4, "0")}`),
-          limit(1)
-        );
-        const checkSnap = await getDocs(checkQuery);
-        
-        if (!checkSnap.empty) {
-          // Number already exists, skip ahead
-          console.warn(`Counter collision detected at ${next} for year ${currentYear}, skipping...`);
-          const skipTo = next + 1;
-          
-          transaction.set(counterRef, {
-            currentNumber: skipTo,
-            year: currentYear,
-            lastUpdated: serverTimestamp(),
-            startingNumber: isTest ? 0 : STARTING_NUMBER,
-            type: isTest ? "test" : "production",
-            lastCollision: serverTimestamp(),
-          });
-          return skipTo;
-        }
-
-        // Update counter with current year
-        transaction.set(counterRef, {
-          currentNumber: next,
-          year: currentYear,
-          lastUpdated: serverTimestamp(),
-          startingNumber: isTest ? 0 : STARTING_NUMBER,
-          type: isTest ? "test" : "production",
-        });
-
-        return next;
-      });
-
-      const formattedNumber = `${prefix}${String(nextNum).padStart(4, "0")}`;
-
-      // Reserve the number immediately to prevent other users from getting it
+      const formattedNumber = `${prefix}${String(next).padStart(4, "0")}`;
       const reserved = await reserveNumber(formattedNumber, isTest);
       if (!reserved) {
-        console.warn(`Failed to reserve ${formattedNumber}, retrying...`);
         lastError = new Error("Reservation failed");
         continue;
       }
 
-      // Final verification that this exact number doesn't exist
       const exists = await isJobRequestNumberExists(formattedNumber);
       if (exists) {
-        console.warn(`Number ${formattedNumber} already exists in database, retrying...`);
         await releaseReservedNumber(formattedNumber);
         lastError = new Error("Number already exists");
-        
-        // Small delay before retry to reduce contention
         if (attempt < MAX_RETRIES) {
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS * attempt));
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
         }
         continue;
       }
 
-      return formattedNumber;
+      const isReserved = await isNumberReserved(formattedNumber);
+      if (isReserved) {
+        await releaseReservedNumber(formattedNumber);
+        lastError = new Error("Number currently reserved");
+        if (attempt < MAX_RETRIES) {
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * attempt));
+        }
+        continue;
+      }
 
+      await persistCounterRow(isTest, next, currentYear);
+      return formattedNumber;
     } catch (error: any) {
       console.error(`Attempt ${attempt} failed:`, error);
       lastError = error;
-      
-      // Exponential backoff before retry
       if (attempt < MAX_RETRIES) {
         const delay = RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
   }
 
-  // All retries exhausted
-  throw new Error(
-    `Failed to generate unique job request number after ${MAX_RETRIES} attempts. ` +
-    `Last error: ${lastError?.message || "Unknown error"}`
-  );
+  throw new Error(`Failed to generate unique job request number after ${MAX_RETRIES} attempts. Last error: ${lastError?.message || "Unknown error"}`);
 }
 
-
-/**
- * Check if a job request number already exists in the database
- */
-export async function isJobRequestNumberExists(
-  jobRequestNo: string
-): Promise<boolean> {
-  const q = query(
-    collection(db, "job_requests"),
-    where("jobRequestNo", "==", jobRequestNo),
-    limit(1)
-  );
-  const snapshot = await getDocs(q);
-  return !snapshot.empty;
-}
-
-/**
- * Get current counter status (for IT/Engineering admin view)
- */
 export async function getCounterStatus(): Promise<{
   production: {
     currentNumber: number;
@@ -241,45 +243,64 @@ export async function getCounterStatus(): Promise<{
     year: number;
   };
 }> {
-  const [prodSnap, testSnap] = await Promise.all([
-    getDoc(doc(db, "counters", COUNTER_DOC_ID)),
-    getDoc(doc(db, "counters", "job_requests_test")),
-  ]);
-
   const currentYear = new Date().getFullYear();
-  const prodYear = prodSnap.exists() ? (prodSnap.data().year || currentYear) : currentYear;
-  const testYear = testSnap.exists() ? (testSnap.data().year || currentYear) : currentYear;
+  const client = getSupabaseClient();
 
-  return {
-    production: {
-      currentNumber: prodSnap.exists()
-        ? prodSnap.data().currentNumber || STARTING_NUMBER
-        : STARTING_NUMBER,
-      lastUsed: prodSnap.exists()
-        ? `JR-${prodYear}-${String(prodSnap.data().currentNumber || STARTING_NUMBER).padStart(4, "0")}`
-        : null,
-      startingNumber: prodSnap.exists()
-        ? prodSnap.data().startingNumber || STARTING_NUMBER
-        : STARTING_NUMBER,
-      year: prodYear,
-    },
-    test: {
-      currentNumber: testSnap.exists()
-        ? testSnap.data().currentNumber || 0
-        : 0,
-      lastUsed: testSnap.exists()
-        ? `TEST-JR-${testYear}-${String(testSnap.data().currentNumber || 0).padStart(4, "0")}`
-        : null,
-      year: testYear,
-    },
-  };
+  if (!client) {
+    return {
+      production: {
+        currentNumber: memoryCounters.get(`job_requests:${currentYear}`) ?? STARTING_NUMBER,
+        lastUsed: null,
+        startingNumber: STARTING_NUMBER,
+        year: currentYear,
+      },
+      test: {
+        currentNumber: memoryCounters.get(`job_requests_test:${currentYear}`) ?? 1,
+        lastUsed: null,
+        year: currentYear,
+      },
+    };
+  }
+
+  try {
+    const [{ data: productionData, error: productionError }, { data: testData, error: testError }] = await Promise.all([
+      client.from("job_request_counters").select("*").eq("id", "job_requests").maybeSingle(),
+      client.from("job_request_counters").select("*").eq("id", "job_requests_test").maybeSingle(),
+    ]);
+
+    if (productionError && (productionError as any).code !== "42P01") throw productionError;
+    if (testError && (testError as any).code !== "42P01") throw testError;
+
+    return {
+      production: {
+        currentNumber: productionData?.current_number ?? STARTING_NUMBER,
+        lastUsed: productionData?.last_updated_at ?? null,
+        startingNumber: productionData?.starting_number ?? STARTING_NUMBER,
+        year: productionData?.year ?? currentYear,
+      },
+      test: {
+        currentNumber: testData?.current_number ?? 1,
+        lastUsed: testData?.last_updated_at ?? null,
+        year: testData?.year ?? currentYear,
+      },
+    };
+  } catch (error) {
+    return {
+      production: {
+        currentNumber: memoryCounters.get(`job_requests:${currentYear}`) ?? STARTING_NUMBER,
+        lastUsed: null,
+        startingNumber: STARTING_NUMBER,
+        year: currentYear,
+      },
+      test: {
+        currentNumber: memoryCounters.get(`job_requests_test:${currentYear}`) ?? 1,
+        lastUsed: null,
+        year: currentYear,
+      },
+    };
+  }
 }
 
-/**
- * Admin function to adjust the counter (IT/Engineering only)
- * @param newNumber - The new current number to set
- * @param isTest - Whether to adjust test or production counter
- */
 export async function adjustCounter(
   newNumber: number,
   isTest: boolean = false
@@ -289,17 +310,19 @@ export async function adjustCounter(
       return { success: false, message: "Number must be at least 1" };
     }
 
-    const counterRef = doc(
-      db,
-      "counters",
-      isTest ? "job_requests_test" : COUNTER_DOC_ID
-    );
+    const client = getSupabaseClient();
+    if (client) {
+      const { error } = await client.from("job_request_counters").upsert(
+        { id: isTest ? "job_requests_test" : "job_requests", current_number: newNumber, type: isTest ? "test" : "production", last_updated_at: new Date().toISOString(), year: new Date().getFullYear() },
+        { onConflict: "id" }
+      );
 
-    await updateDoc(counterRef, {
-      currentNumber: newNumber,
-      manuallyAdjusted: true,
-      adjustedAt: serverTimestamp(),
-    });
+      if (error && (error as any).code !== "42P01") {
+        throw error;
+      }
+    } else {
+      memoryCounters.set(`${isTest ? "job_requests_test" : "job_requests"}:${new Date().getFullYear()}`, newNumber);
+    }
 
     return {
       success: true,
@@ -313,10 +336,6 @@ export async function adjustCounter(
   }
 }
 
-/**
- * Admin function to initialize/reset the counter with a specific starting number
- * @param startingNumber - The number to start from (next will be startingNumber + 1)
- */
 export async function initializeCounter(
   startingNumber: number = STARTING_NUMBER
 ): Promise<{ success: boolean; message: string }> {
@@ -325,27 +344,30 @@ export async function initializeCounter(
       return { success: false, message: "Starting number must be at least 1" };
     }
 
-    const counterRef = doc(db, "counters", COUNTER_DOC_ID);
+    const client = getSupabaseClient();
+    if (client) {
+      const { error } = await client.from("job_request_counters").upsert(
+        {
+          id: "job_requests",
+          current_number: startingNumber,
+          starting_number: startingNumber,
+          initialized: true,
+          initialized_at: new Date().toISOString(),
+          last_updated_at: new Date().toISOString(),
+          type: "production",
+          year: new Date().getFullYear(),
+        },
+        { onConflict: "id" }
+      );
 
-    await setDoc(
-      counterRef,
-      {
-        currentNumber: startingNumber,
-        startingNumber: startingNumber,
-        initialized: true,
-        initializedAt: serverTimestamp(),
-        lastUpdated: serverTimestamp(),
-        type: "production",
-      },
-      { merge: true }
-    );
+      if (error && (error as any).code !== "42P01") throw error;
+    } else {
+      memoryCounters.set(`job_requests:${new Date().getFullYear()}`, startingNumber);
+    }
 
     return {
       success: true,
-      message: `Counter initialized. Next job request will be JR${new Date()
-        .getFullYear()
-        .toString()
-        .slice(-2)}-${String(startingNumber + 1).padStart(4, "0")}`,
+      message: `Counter initialized. Next job request will be JR${new Date().getFullYear().toString().slice(-2)}-${String(startingNumber + 1).padStart(4, "0")}`,
     };
   } catch (error: any) {
     return {

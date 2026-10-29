@@ -100,3 +100,20 @@ export const migrateToPrefixedStorage = (): void => {
     }
   });
 };
+
+/**
+ * Clear all cookies from the browser
+ * This is useful for logout functionality to ensure all session cookies are removed
+ */
+export const clearAllCookies = (): void => {
+  if (typeof window === "undefined") return;
+
+  document.cookie.split(";").forEach((c) => {
+    const eqPos = c.indexOf("=");
+    const name = eqPos > -1 ? c.slice(0, eqPos).trim() : c.trim();
+    // Clear cookie with domain
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; domain=${window.location.hostname}`;
+    // Clear cookie without domain (for some cookie configurations)
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  });
+};

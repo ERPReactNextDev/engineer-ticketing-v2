@@ -1,9 +1,11 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FileText, Send, RotateCcw, Loader2, Lock, Plus, Minus, Trash2, ChevronDown, ChevronRight, ChevronUp, Upload, Calculator } from "lucide-react";
+import { FileText, Send, RotateCcw, Loader2, Lock, Plus, Minus, Trash2, ChevronDown, ChevronRight, ChevronUp, Upload, Calculator, Info } from "lucide-react";
+import { createPortal } from "react-dom";
 
 import { toast } from "sonner";
+import { getJobRequestById, type JobRequestRow } from "@/lib/job-request-supabase";
 import { parseBoqGrid, parseTsv, readBoqFile, type ImportedSection, convertToBoqSections } from "./boq-import";
 import {
   CustomPricingCalculator,
@@ -15,10 +17,6 @@ import {
   type CustomPricingFields,
   type CustomPricingRow,
 } from "./custom-pricing-calculator";
-
-// DATABASE
-import { db } from "@/lib/firebase";
-import { doc, getDoc } from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,7 +58,7 @@ const FIELDS: FieldDef[] = [
   { key: "clientName", label: "Client Name", placeholder: "Client name", span: 1 },
   { key: "address", label: "Address", placeholder: "Site address", required: true, span: 3 },
   { key: "projectDuration", label: "Project Duration", placeholder: "e.g. 10/14/2026 - 10/20/2026", span: 1 },
-  { key: "workHours", label: "Work Hours", placeholder: "e.g. 10/14/2026, 8:00 AM - 10/14/2026, 5:00 PM", span: 2 },
+  { key: "totalWorkingDays", label: "Total Working Days", placeholder: "e.g. 4", span: 2 },
   { key: "scopeOfWork", label: "Detailed Scope of Work", placeholder: "Describe the work...", multiline: true, required: true, span: 3 },
 ];
 
@@ -91,7 +89,7 @@ export type JobFillUpFormValues = Record<string, string>;
    The 4 "Total" cells are computed automatically and are read-only.
 ───────────────────────────────────────────── */
 export type TotalKey = "totalMaterialCost" | "totalLaborCost" | "totalConsumable" | "totalAmount";
-export type InputKey = "description" | "qty" | "unit" | "materialCost" | "laborCost" | "consumableCost";
+export type InputKey = "description" | "qty" | "unit" | "materialCost" | "laborCost" | "consumableCost" | "toolType" | "toolUsage" | "toolDepYears" | "toolDepFactor"| "rentalFee";
 
 export type BoqRow = CustomPricingFields & {
   id: string;
@@ -101,7 +99,16 @@ export type BoqRow = CustomPricingFields & {
   materialCost: string;
   laborCost: string;
   consumableCost: string;
+  /** TOOLS section only: "power" | "hand" | "safety" */
+  toolType?: string;
+  /** Hand tools: how many usage */
+  toolUsage?: string;
+  /** Power tools: depreciation years */
+  toolDepYears?: string;
+  /** Power tools: divisor used with depreciation years (blank = 100) */
+  toolDepFactor?: string;
   /** Final values — filled in on submit only */
+  rentalFee?: string;
   totalMaterialCost?: string;
   totalLaborCost?: string;
   totalConsumable?: string;
@@ -111,8 +118,11 @@ export type BoqRow = CustomPricingFields & {
 export type BoqSection = {
   id: string;
   title: string;
+  /** true = title was picked from the standard dropdown (read-only) */
+  titleLocked?: boolean;
   rows: BoqRow[];
 };
+
 
 export type BoqSummary = {
   materialCost: number;
@@ -126,7 +136,12 @@ export type BoqSummary = {
   costPerItem: number;
 };
 
-export type ProcurementRow = { qty: string; cost: string } & CustomPricingFields;
+export type ProcurementRow = {
+  qty: string;
+  cost: string;
+  /** HEAVY EQUIPMENT RENTAL only: flat mob/demob amount (blank = 0) */
+  mobDemob?: string;
+} & CustomPricingFields;
 export type ProcurementSummary = {
   total: number;
   warrantyPct: number;
@@ -145,15 +160,18 @@ export type ProcurementData = {
   warrantyPct: string;
   contingencyPct: string;
   markup: string;
+  sayRoundTo?: string;
   summary: ProcurementSummary;
   /** Custom pricing of the procurement SUBTOTAL, keyed by section id */
   sectionCustom?: Record<string, CustomPricingFields>;
+  /** Multiplier of the procurement SUBTOTAL, keyed by section id (blank = ×1) */
+  sectionMultiplier?: Record<string, string>;
   savedBy?: string;
   savedAt?: any;
 };
 
 /**
- * A saved fill-up form (stored in the "job_fill_ups" collection, doc id = job request id).
+ * A saved fill-up form (stored in the "boq_draft" table, keyed by job request id).
  * status: "draft" while waiting for engineering to finish, "completed" once it was copied
  * into the job_requests document.
  */
@@ -184,6 +202,32 @@ const newBoqRow = (): BoqRow => ({
 
 const newBoqSection = (): BoqSection => ({ id: uid(), title: "", rows: [newBoqRow()] });
 
+const STANDARD_SECTION_TITLES = [
+  "GENERAL REQUIREMENTS",
+  "CIVIL WORKS",
+  "EE WORKS",
+  "LABOR",
+  "TOOLS",
+  "HEAVY EQUIPMENT RENTAL",
+] as const;
+
+const isStandardTitle = (t: string) =>
+  (STANDARD_SECTION_TITLES as readonly string[]).includes((t ?? "").trim().toUpperCase());
+
+const TOOL_TYPES = [
+  { value: "power", label: "Power Tools" },
+  { value: "hand", label: "Hand Tools" },
+  { value: "safety", label: "Safety Equipment / Miscellaneous" },
+] as const;
+
+const isToolsSection = (s: { title: string }) => (s.title ?? "").trim().toUpperCase() === "TOOLS";
+const isRentalSection = (s: { title: string }) =>
+  (s.title ?? "").trim().toUpperCase() === "HEAVY EQUIPMENT RENTAL";
+
+// Paste order = Excel BOQ order. null = auto-computed total column (skipped when pasting)
+const ENG_PASTE_COLS = ["description", "qty", "unit", "materialCost", null, "laborCost", null, "consumableCost"] as const;
+const ENG_COL_INDEX = { description: 0, qty: 1, unit: 2, materialCost: 3, laborCost: 5, consumableCost: 7 } as const;
+
 type ColumnDef =
   | { key: "qty" | "materialCost" | "laborCost" | "consumableCost"; label: string; kind: "input" }
   | { key: TotalKey; label: string; kind: "total" };
@@ -206,7 +250,19 @@ const BOQ_GRID =
 const BOQ_GRID_PROC =
   "grid grid-cols-[621px_minmax(280px,1fr)_90px_90px_repeat(7,125px)_40px] gap-2 items-start";
 
+// Same grids, plus 3 tool columns (Tool Type 190px | Usage 110px | Depreciation Years 130px) after Unit
+const BOQ_GRID_TOOLS =
+  "grid grid-cols-[60px_minmax(280px,1fr)_90px_90px_190px_110px_130px_110px_repeat(7,125px)_40px] gap-2 items-start";
+const BOQ_GRID_PROC_TOOLS =
+  "grid grid-cols-[621px_minmax(280px,1fr)_90px_90px_190px_110px_130px_110px_repeat(7,125px)_40px] gap-2 items-start";
+const BOQ_GRID_RENTAL =
+  "grid grid-cols-[60px_minmax(280px,1fr)_90px_90px_130px_repeat(7,125px)_40px] gap-2 items-start";
+const BOQ_GRID_PROC_RENTAL =
+  "grid grid-cols-[749px_minmax(280px,1fr)_90px_90px_130px_repeat(7,125px)_40px] gap-2 items-start";
 // Sticky left group wrapper (Item No + Procurement Qty/Cost/Total/Variance)
+// Rental version: Item No | Qty | Cost | Mob/Demob | Total | Variance
+const PROC_STICKY_RENTAL =
+  "grid grid-cols-[60px_100px_130px_120px_135px_140px] gap-2 sticky left-0 z-10 self-stretch -ml-3 pl-3 pr-3 border-r border-slate-200 shadow-[4px_0_6px_-4px_rgba(0,0,0,0.12)]";
 const PROC_STICKY =
   "grid grid-cols-[60px_100px_130px_135px_140px] gap-2 sticky left-0 z-10 self-stretch -ml-3 pl-3 pr-3 border-r border-slate-200 shadow-[4px_0_6px_-4px_rgba(0,0,0,0.12)]";
 
@@ -227,18 +283,23 @@ const toRoman = (num: number): string => {
 };
 
 // Allow digits and a single decimal point only
-const sanitizeDecimal = (value: string) => {
-  const cleaned = value.replace(/[^0-9.]/g, "");
+const sanitizeDecimal = (value: string | undefined) => {
+  const cleaned = (value ?? "").replace(/[^0-9.]/g, "");
   const firstDot = cleaned.indexOf(".");
   if (firstDot === -1) return cleaned;
   return cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, "");
 };
 
-// "4" -> "4.00" on blur
-const formatDecimal = (value: string) => {
-  if (!value || value === ".") return "";
-  const n = parseFloat(value);
-  return Number.isNaN(n) ? "" : n.toFixed(2);
+// "4" -> "4.00", pero "1966.666667" ay mananatiling buo (walang early rounding)
+const formatDecimal = (value: string | number | undefined) => {
+  if (value === "" || value === "." || value === undefined || value === null) return "";
+  const n = typeof value === "number" ? value : parseFloat(value);
+  if (Number.isNaN(n)) return "";
+  if (typeof value === "string") {
+    const decimals = value.includes(".") ? value.split(".")[1].length : 0;
+    if (decimals > 2) return value; // keep full precision
+  }
+  return n.toFixed(2);
 };
 
 const toNumber = (value: string | undefined) => {
@@ -261,10 +322,27 @@ const stripCustom = (r: BoqRow): BoqRow => {
 const isManualCustom = (r: BoqRow) => !!r.customPricing && customMethodOf(r) === "manual";
 
 /* ── ROW FORMULAS ── */
-const rowTotals = (r: BoqRow): Record<TotalKey, number> => {
+const rowTotals = (r: BoqRow, workingDays = 0, isTools = false, isRental = false): Record<TotalKey, number> => {
   const qty = toNumber(r.qty);
+  const material = toNumber(r.materialCost);
 
-  const totalMaterialCost = r.customPricing ? computeCustomMaterial(r) : qty * toNumber(r.materialCost);
+  let totalMaterialCost = qty * material;
+  if (isTools) {
+    if (r.toolType === "hand") {
+      // Qty x Cost / Usage
+      const usage = toNumber(r.toolUsage);
+      if (usage > 0) totalMaterialCost = (qty * material) / usage;
+    } else if (r.toolType === "power" || r.toolType === "safety") {
+      // (Cost / (Depreciation Years x 100)) x Total Working Days x Qty
+      const factor = toNumber(r.toolDepFactor) > 0 ? toNumber(r.toolDepFactor) : 100;
+      const denom = toNumber(r.toolDepYears) * factor;
+      if (denom > 0) totalMaterialCost = (material / denom) * workingDays * qty;
+    }
+  }
+  if (isRental) {
+    // (Qty × Cost) + Mobilization Fee
+    totalMaterialCost = qty * material + toNumber(r.rentalFee);
+  }
   const totalLaborCost = qty * toNumber(r.laborCost);
   const totalConsumable = qty * toNumber(r.consumableCost);
   const totalAmount = totalMaterialCost + totalLaborCost + totalConsumable;
@@ -278,13 +356,14 @@ const isRowEmpty = (r: BoqRow) =>
   !r.qty.trim() &&
   !r.materialCost.trim() &&
   !r.laborCost.trim() &&
-  !r.consumableCost.trim();
+  !r.consumableCost.trim() &&
+  !(r.rentalFee ?? "").trim();
 
 /* ── SECTION FORMULA (SUBTOTAL AMOUNT) ── */
-const sectionSubtotals = (s: BoqSection) =>
+const sectionSubtotals = (s: BoqSection, workingDays = 0) =>
   (s.rows ?? []).reduce(
     (acc, r) => {
-      const t = rowTotals(r);
+      const t = rowTotals(r, workingDays, isToolsSection(s), isRentalSection(s));
       return {
         material: acc.material + t.totalMaterialCost,
         labor: acc.labor + t.totalLaborCost,
@@ -296,8 +375,8 @@ const sectionSubtotals = (s: BoqSection) =>
   );
 
 /* ── PROJECT SUMMARY FORMULAS ── */
-const computeSummary = (sections: BoqSection[], contingencyPctStr: string, unitCountStr: string): BoqSummary => {
-  const subs = sections.map(sectionSubtotals);
+const computeSummary = (sections: BoqSection[], contingencyPctStr: string, unitCountStr: string, workingDays = 0): BoqSummary => {
+  const subs = sections.map((s) => sectionSubtotals(s, workingDays));
   const materialCost = subs.reduce((a, s) => a + s.material, 0);
   const laborCost = subs.reduce((a, s) => a + s.labor, 0);
   const consumables = subs.reduce((a, s) => a + s.consumable, 0);
@@ -324,8 +403,8 @@ const computeSummary = (sections: BoqSection[], contingencyPctStr: string, unitC
 };
 
 // Freeze the computed totals into the row (used on submit)
-const finalizeRow = (r: BoqRow): BoqRow => {
-  const t = rowTotals(r);
+const finalizeRow = (r: BoqRow, workingDays = 0, isTools = false, isRental = false): BoqRow => {
+  const t = rowTotals(r, workingDays, isTools, isRental);
   return {
     ...r,
     totalMaterialCost: t.totalMaterialCost.toFixed(2),
@@ -340,38 +419,91 @@ const DEFAULT_WARRANTY = "5";
 const DEFAULT_PROC_CONTINGENCY = "4";
 const DEFAULT_MARKUP = "2";
 const VAT_RATE = 0.12;
-const SAY_ROUND_TO = 10000;
+const DEFAULT_SAY_ROUND_TO = "10000";
+const SAY_ROUNDING_OPTIONS = [
+  { value: "0.01", label: "Hundredths (₱0.01)" },
+  { value: "0.1", label: "Tenths (₱0.10)" },
+  { value: "1", label: "Ones (₱1)" },
+  { value: "10", label: "Tens (₱10)" },
+  { value: "100", label: "Hundreds (₱100)" },
+  { value: "1000", label: "Thousands (₱1,000)" },
+  { value: "10000", label: "Ten thousands (₱10,000)" },
+  { value: "100000", label: "Hundred thousands (₱100,000)" },
+  { value: "1000000", label: "Millions (₱1,000,000)" },
+] as const;
 
 // Per row: plain Procurement Qty × Acquired Cost (`_row` kept so call sites don't change)
-const procRowTotal = (p: ProcurementRow | undefined, _row?: BoqRow) => toNumber(p?.qty) * toNumber(p?.cost);
-const procRowEntered = (p?: ProcurementRow) => !!(p?.qty?.trim() || p?.cost?.trim());
+const procRowAsCustomRow = (p?: ProcurementRow, row?: BoqRow): CustomPricingRow => ({
+  ...(p || {}),
+  description: row?.description ?? "",
+  unit: row?.unit ?? "",
+  qty: p?.qty ?? "",
+  materialCost: p?.cost ?? "",
+});
+const usesEngineeringTotalForProcurement = (row?: BoqRow) =>
+  toNumber(row?.toolDepYears) > 0 || toNumber(row?.toolUsage) > 0;
+
+const RENTAL_VAT_EXE = 1.12; // fixed
+
+const procRowTotal = (
+  p: ProcurementRow | undefined,
+  row?: BoqRow,
+  workingDays = 0,
+  isTools = false,
+  isRental = false
+) =>
+  isTools && row && usesEngineeringTotalForProcurement(row)
+    ? rowTotals(row, workingDays, true).totalAmount
+    : p?.customPricing
+    ? computeCustomMaterial(procRowAsCustomRow(p, row))
+    : isRental
+    ? // (Qty × Cost + Mob/Demob) × 1.12
+      (toNumber(p?.qty) * toNumber(p?.cost) + toNumber(p?.mobDemob)) * RENTAL_VAT_EXE
+    : toNumber(p?.qty) * toNumber(p?.cost);
+const procRowEntered = (p?: ProcurementRow, row?: BoqRow) =>
+  !!(
+    usesEngineeringTotalForProcurement(row) ||
+    p?.customPricing ||
+    p?.qty?.trim() ||
+    p?.cost?.trim() ||
+    p?.mobDemob?.trim()
+  );
 
 // Section subtotal BEFORE custom pricing
-const sectionProcBase = (s: BoqSection, procRows: Record<string, ProcurementRow>) =>
-  (s.rows ?? []).reduce((acc, r) => acc + procRowTotal(procRows[r.id], r), 0);
+const sectionProcBase = (s: BoqSection, procRows: Record<string, ProcurementRow>, workingDays = 0) =>
+  (s.rows ?? []).reduce(
+    (acc, r) =>
+      acc + procRowTotal(procRows[r.id], r, workingDays, isToolsSection(s), isRentalSection(s)),
+    0
+  );
 
 // Custom pricing of the procurement SUBTOTAL (same calculator): Cost = section subtotal, Qty = 1
 const procSectionAsCustomRow = (
   s: BoqSection,
   procRows: Record<string, ProcurementRow>,
-  custom?: CustomPricingFields
+  custom?: CustomPricingFields,
+  workingDays = 0
 ): CustomPricingRow => ({
   ...(custom ?? {}),
   description: s.title ? `${s.title} (Subtotal)` : "Section subtotal",
   unit: "",
   qty: "1",
-  materialCost: String(sectionProcBase(s, procRows)),
+  materialCost: String(sectionProcBase(s, procRows, workingDays)),
 });
 
 const sectionProcTotal = (
   s: BoqSection,
   procRows: Record<string, ProcurementRow>,
-  sectionCustom?: Record<string, CustomPricingFields>
+  sectionCustom?: Record<string, CustomPricingFields>,
+  workingDays = 0,
+  sectionMult?: Record<string, string>
 ) => {
   const custom = sectionCustom?.[s.id];
-  return custom?.customPricing
-    ? computeCustomMaterial(procSectionAsCustomRow(s, procRows, custom))
-    : sectionProcBase(s, procRows);
+  const base = custom?.customPricing
+    ? computeCustomMaterial(procSectionAsCustomRow(s, procRows, custom, workingDays))
+    : sectionProcBase(s, procRows, workingDays);
+  const m = toNumber(sectionMult?.[s.id]);
+  return base * (m > 0 ? m : 1); // blank / 0 = ×1
 };
 
 const signedPeso = (n: number) => (n < 0 ? `-${peso(-n)}` : peso(n));
@@ -383,10 +515,13 @@ const computeProcurementSummary = (
   warrantyStr: string,
   contingencyStr: string,
   markupStr: string,
-  sectionCustom?: Record<string, CustomPricingFields>
+  sectionCustom?: Record<string, CustomPricingFields>,
+  sayRoundToStr = DEFAULT_SAY_ROUND_TO,
+  workingDays = 0,
+  sectionMult?: Record<string, string>
 ): ProcurementSummary => {
-  const total = sections.reduce((a, s) => a + sectionProcTotal(s, procRows, sectionCustom), 0);
-  const engTotal = sections.reduce((a, s) => a + sectionSubtotals(s).total, 0);
+  const total = sections.reduce((a, s) => a + sectionProcTotal(s, procRows, sectionCustom, workingDays, sectionMult), 0);
+  const engTotal = sections.reduce((a, s) => a + sectionSubtotals(s, workingDays).total, 0);
 
   const warrantyPct = toNumber(warrantyStr);
   const contingencyPct = toNumber(contingencyStr);
@@ -397,7 +532,10 @@ const computeProcurementSummary = (
   const directCost = total + warranty + contingency;
   const vat = directCost * (1 + VAT_RATE);
   const withMarkup = vat * markup;
-  const say = Math.ceil(withMarkup / SAY_ROUND_TO) * SAY_ROUND_TO;
+  const sayRoundToCents = Math.round(toNumber(sayRoundToStr) * 100);
+  const say = sayRoundToCents > 0
+    ? Math.ceil((withMarkup * 100 - 1e-8) / sayRoundToCents) * sayRoundToCents / 100
+    : withMarkup;
 
   return {
     total, warrantyPct, warranty, contingencyPct, contingency,
@@ -409,14 +547,42 @@ const computeProcurementSummary = (
 const DEFAULT_CONTINGENCY = "7";
 const DEFAULT_UNIT_COUNT = "1";
 
-/* ─────────────────────────────────────────────
-   HELPERS — map a job_requests document to form values
-───────────────────────────────────────────── */
-const fmtDate = (v: any) => (v ? new Date(v).toLocaleDateString() : "N/A");
-const fmtDateTime = (v: any) => (v ? new Date(v).toLocaleString() : "N/A");
+/* Unsaved work survives closing the dialog (outside click / Esc / X).
+   Cleared on Submit, Save Procurement, or Cancel. */
+type UnsavedSnapshot = {
+  values: JobFillUpFormValues;
+  boqSections: BoqSection[];
+  contingencyPct: string;
+  unitCount: string;
+  procRows: Record<string, ProcurementRow>;
+  procWarrantyPct: string;
+  procContingencyPct: string;
+  procMarkup: string;
+  procSayRoundTo: string;
+  procSectionCustom: Record<string, CustomPricingFields>;
+  procSectionMult: Record<string, string>;
+};
+const UNSAVED_CACHE = new Map<string, UnsavedSnapshot>();
 
-async function resolveAgentName(job: any): Promise<string> {
-  const ref = job?.agentName?.trim();
+/* ─────────────────────────────────────────────
+   HELPERS — map a job_requests row to form values
+───────────────────────────────────────────── */
+const fmtDate = (value?: string | Date | null) => {
+  if (!value) return "N/A";
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? "N/A" : date.toLocaleDateString();
+};
+
+const formatRequestedDate = (value?: string | Date | null) => {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+};
+
+async function resolveAgentName(job: Pick<JobRequestRow, "agentName" | "submittedByName">): Promise<string> {
+  const ref = job.agentName?.trim();
   if (!ref) return job?.submittedByName || "";
   try {
     const res = await fetch(`/api/user-by-reference?referenceid=${encodeURIComponent(ref)}`);
@@ -428,30 +594,29 @@ async function resolveAgentName(job: any): Promise<string> {
   }
 }
 
-async function mapJobToFormValues(job: any): Promise<JobFillUpFormValues> {
-  const hasRange = job?.workingTimeFrom || job?.workingTimeTo;
+async function mapJobToFormValues(job: JobRequestRow): Promise<JobFillUpFormValues> {
+  const hasRange = job.workingTimeFrom || job.workingTimeTo;
+  const totalWorkingDays = typeof job.totalWorkingDays === "number"
+    ? String(job.totalWorkingDays)
+    : "";
 
   return {
-    jrNumber: job?.jobRequestNo || "",
-    dateRequested: job?.createdAt?.toDate
-      ? job.createdAt.toDate().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
-      : "",
+    jrNumber: job.jobRequestNo || "",
+    dateRequested: formatRequestedDate(job.createdAt),
     agentName: await resolveAgentName(job),
-    projectTitle: job?.projectTitle || "",
-    clientName: job?.clientName || "GENERAL",
-    address: job?.location || "",
-    projectDuration: hasRange ? `${fmtDate(job?.workingTimeFrom)} - ${fmtDate(job?.workingTimeTo)}` : "",
-    workHours: hasRange
-      ? `${fmtDateTime(job?.workingTimeFrom)} - ${fmtDateTime(job?.workingTimeTo)}`
-      : job?.workingTime || "",
-    scopeOfWork: job?.scopeOfWork || "",
+    projectTitle: job.projectTitle || "",
+    clientName: job.clientName || "GENERAL",
+    address: job.location || "",
+    projectDuration: hasRange ? `${fmtDate(job.workingTimeFrom)} - ${fmtDate(job.workingTimeTo)}` : "",
+    totalWorkingDays,
+    scopeOfWork: job.scopeOfWork || "",
   };
 }
 
 interface JobFillUpFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Firestore doc id in "job_requests" (the id in /request/job/[id]). Form auto-populates from it. */
+  /** Supabase job_requests id (the id in /request/job/[id]). Form auto-populates from it. */
   requestId?: string;
   /**
    * View mode: shows the saved draft (see `draft`) with every input disabled and
@@ -478,8 +643,49 @@ interface JobFillUpFormDialogProps {
   showProcurement?: boolean;
   /** Procurement inputs are editable */
   procurementEditable?: boolean;
+  /** Hide BOQ custom-pricing controls for roles that should not use them. */
+  allowBoqCustomPricing?: boolean;
   /** Save button of the procurement columns (works even when the rest of the form is read-only) */
   onSaveProcurement?: (data: ProcurementData) => void | Promise<void>;
+}
+
+/* Small "i" icon with a hover/focus tooltip (portaled so the sticky header's overflow doesn't clip it) */
+function InfoTip({ children, label = "More info" }: { children: React.ReactNode; label?: string }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+
+  const show = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    const x = Math.min(Math.max(r.left + r.width / 2, 170), window.innerWidth - 170);
+    setPos({ x, y: r.bottom + 6 });
+  };
+
+  return (
+    <>
+      <span
+        tabIndex={0}
+        role="button"
+        aria-label={label}
+        onMouseEnter={(e) => show(e.currentTarget)}
+        onMouseLeave={() => setPos(null)}
+        onFocus={(e) => show(e.currentTarget)}
+        onBlur={() => setPos(null)}
+        className="inline-flex size-4 shrink-0 cursor-help items-center justify-center rounded-full bg-sky-500 text-white normal-case"
+      >
+        <Info size={10} strokeWidth={3} />
+      </span>
+      {pos &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            style={{ position: "fixed", left: pos.x, top: pos.y, transform: "translateX(-50%)" }}
+            className="pointer-events-none z-[9999] w-[320px] rounded-lg bg-slate-900 px-3 py-2.5 text-[11px] font-medium normal-case leading-snug tracking-normal text-white shadow-xl"
+          >
+            {children}
+          </div>,
+          document.body
+        )}
+    </>
+  );
 }
 
 export function JobFillUpFormDialog({
@@ -491,6 +697,7 @@ export function JobFillUpFormDialog({
   onSubmit,
   showProcurement = false,
   procurementEditable = false,
+  allowBoqCustomPricing: _allowBoqCustomPricing, // ignored: BOQ custom pricing is removed
   onSaveProcurement,
 }: JobFillUpFormDialogProps) {
   const [values, setValues] = useState<JobFillUpFormValues>(EMPTY_DATA);
@@ -510,31 +717,60 @@ export function JobFillUpFormDialog({
   const [procWarrantyPct, setProcWarrantyPct] = useState(DEFAULT_WARRANTY);
   const [procContingencyPct, setProcContingencyPct] = useState(DEFAULT_PROC_CONTINGENCY);
   const [procMarkup, setProcMarkup] = useState(DEFAULT_MARKUP);
+  const [procSayRoundTo, setProcSayRoundTo] = useState(DEFAULT_SAY_ROUND_TO);
   const [procSectionCustom, setProcSectionCustom] = useState<Record<string, CustomPricingFields>>({});
+  const [procSectionMult, setProcSectionMult] = useState<Record<string, string>>({});
   const [isSavingProc, setIsSavingProc] = useState(false);
 
   // view mode shows the draft read-only, edit mode ("Load Draft") pre-fills the editable form
   const viewDraft = readOnly ? draft : null;
   const editDraft = readOnly ? null : draft;
 
+  // Unsaved-work cache: separate slot for edit mode (Engineering) and view mode (Procurement)
+  const cacheKey = `${requestId ?? draft?.requestId ?? "new"}:${readOnly ? "view" : "edit"}`;
+  // true only after the open-effect finished restoring, so we never overwrite the cache with a blank reset state
+  const [hydrated, setHydrated] = useState(false);
+
   // Everything is frozen while the job request loads, and always in view mode
   const locked = isLoadingJob || readOnly;
   const canEditProc = showProcurement && procurementEditable && !isLoadingJob;
   // Header, rows and subtotal all use this so the procurement columns stay on the SAME row
-  const gridClass = showProcurement ? BOQ_GRID_PROC : BOQ_GRID;
+  const gridClass = showProcurement ? BOQ_GRID_PROC : BOQ_GRID; // (no longer used, you can delete this line)
+  const workingDays = toNumber(values.totalWorkingDays);
+  const allowBoqCustomPricing = false; // BOQ (Engineering) custom pricing is removed
 
   // Populate every time the dialog opens
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setHydrated(false);
+      return;
+    }
 
     setCollapsedIds([]);
+    const cached = UNSAVED_CACHE.get(cacheKey);
+    const restoreProc = (c: UnsavedSnapshot) => {
+      setProcRows(c.procRows);
+      setProcWarrantyPct(c.procWarrantyPct);
+      setProcContingencyPct(c.procContingencyPct);
+      setProcMarkup(c.procMarkup);
+      setProcSayRoundTo(c.procSayRoundTo);
+      setProcSectionCustom(c.procSectionCustom);
+      setProcSectionMult(c.procSectionMult);
+    };
 
     const applyProc = (d?: FillUpDraft | null) => {
       setProcRows(d?.procurement?.rows ?? {});
       setProcWarrantyPct(String(d?.procurement?.warrantyPct ?? DEFAULT_WARRANTY));
       setProcContingencyPct(String(d?.procurement?.contingencyPct ?? DEFAULT_PROC_CONTINGENCY));
       setProcMarkup(String(d?.procurement?.markup ?? DEFAULT_MARKUP));
+      const savedSayRoundTo = String(d?.procurement?.sayRoundTo ?? DEFAULT_SAY_ROUND_TO);
+      setProcSayRoundTo(
+        SAY_ROUNDING_OPTIONS.some((option) => option.value === savedSayRoundTo)
+          ? savedSayRoundTo
+          : DEFAULT_SAY_ROUND_TO
+      );
       setProcSectionCustom(d?.procurement?.sectionCustom ?? {});
+      setProcSectionMult(d?.procurement?.sectionMultiplier ?? {});
     };
 
     // ── VIEW MODE: show the saved draft ──
@@ -545,6 +781,8 @@ export function JobFillUpFormDialog({
       setContingencyPct(String(viewDraft?.summary?.contingencyPct ?? DEFAULT_CONTINGENCY));
       setUnitCount(String(viewDraft?.summary?.unitCount ?? DEFAULT_UNIT_COUNT));
       applyProc(viewDraft);
+      if (cached) restoreProc(cached); // only the procurement inputs are editable in view mode
+      setHydrated(true);
       return;
     }
 
@@ -562,6 +800,14 @@ export function JobFillUpFormDialog({
     setContingencyPct(String(editDraft?.summary?.contingencyPct ?? DEFAULT_CONTINGENCY));
     setUnitCount(String(editDraft?.summary?.unitCount ?? DEFAULT_UNIT_COUNT));
     applyProc(editDraft);
+    if (cached) {
+      setValues({ ...EMPTY_DATA, ...cached.values });
+      setBoqSections(cached.boqSections);
+      setContingencyPct(cached.contingencyPct);
+      setUnitCount(cached.unitCount);
+      restoreProc(cached);
+    }
+    setHydrated(true);
     if (!requestId) return;
 
     let cancelled = false;
@@ -569,18 +815,19 @@ export function JobFillUpFormDialog({
 
     (async () => {
       try {
-        const snap = await getDoc(doc(db, "job_requests", requestId));
-        if (!snap.exists()) {
+        const job = await getJobRequestById(requestId);
+        if (!job) {
           if (!cancelled) toast.error("Job request not found");
           return;
         }
-        const mapped = await mapJobToFormValues(snap.data());
+        const mapped = await mapJobToFormValues(job);
         if (!cancelled) {
           // Fields that come from the job request stay locked (fresh value wins over the draft)
           const lockedFromJob = FIELDS.filter((f) => mapped[f.key]?.toString().trim()).map((f) => f.key);
           setValues({
             ...EMPTY_DATA,
             ...(editDraft?.values ?? {}),
+            ...(cached?.values ?? {}),
             ...Object.fromEntries(lockedFromJob.map((k) => [k, mapped[k]])),
           });
           setLockedKeys(lockedFromJob);
@@ -596,7 +843,29 @@ export function JobFillUpFormDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, requestId, readOnly, viewDraft, editDraft]);
+  }, [open, requestId, readOnly, viewDraft, editDraft, cacheKey]);
+
+  // Keep the unsaved copy up to date while the dialog is open
+  useEffect(() => {
+    if (!open || !hydrated) return;
+    UNSAVED_CACHE.set(cacheKey, {
+      values,
+      boqSections,
+      contingencyPct,
+      unitCount,
+      procRows,
+      procWarrantyPct,
+      procContingencyPct,
+      procMarkup,
+      procSayRoundTo,
+      procSectionCustom,
+      procSectionMult,
+    });
+  }, [
+    open, hydrated, cacheKey, values, boqSections, contingencyPct, unitCount,
+    procRows, procWarrantyPct, procContingencyPct, procMarkup, procSayRoundTo,
+    procSectionCustom, procSectionMult,
+  ]);
 
   // After adding a section: scroll to it and focus its title
   useEffect(() => {
@@ -627,6 +896,18 @@ export function JobFillUpFormDialog({
 
   const removeSection = (sectionId: string) =>
     setBoqSections((prev) => (prev.length === 1 ? [newBoqSection()] : prev.filter((s) => s.id !== sectionId)));
+
+    // "" = Custom (editable) · otherwise a standard title (locked)
+  const pickStandardTitle = (sectionId: string, value: string) =>
+    setBoqSections((prev) =>
+      prev.map((s) =>
+        s.id === sectionId
+          ? value
+            ? { ...s, title: value, titleLocked: true }
+            : { ...s, title: "", titleLocked: false }
+          : s
+      )
+    );
 
   const updateSectionTitle = (sectionId: string, title: string) =>
     setBoqSections((prev) => prev.map((s) => (s.id === sectionId ? { ...s, title } : s)));
@@ -676,6 +957,7 @@ export function JobFillUpFormDialog({
     rowId: string;
     fresh: boolean;
     proc?: boolean; // true = pricing the PROCUREMENT total amount
+    procRow?: boolean;
   } | null>(null);
 
   const calcRow = useMemo<CustomPricingRow | null>(() => {
@@ -683,6 +965,9 @@ export function JobFillUpFormDialog({
     const sec = boqSections.find((s) => s.id === calcTarget.sectionId);
     if (!sec) return null;
     if (calcTarget.proc) return procSectionAsCustomRow(sec, procRows, procSectionCustom[sec.id]);
+    if (calcTarget.procRow) {
+      return procRowAsCustomRow(procRows[calcTarget.rowId], sec.rows.find((row) => row.id === calcTarget.rowId));
+    }
     return sec.rows.find((x) => x.id === calcTarget.rowId) ?? null;
   }, [calcTarget, boqSections, procRows, procSectionCustom]);
 
@@ -712,11 +997,38 @@ export function JobFillUpFormDialog({
     if (checked) setCalcTarget({ sectionId, rowId: "", fresh: true, proc: true });
   };
 
+  const toggleProcRowCustom = (sectionId: string, rowId: string, checked: boolean) => {
+    const row = boqSections.find((section) => section.id === sectionId)?.rows.find((item) => item.id === rowId);
+    if (!row) return;
+
+    setProcRows((prev) => {
+      const current = prev[rowId] ?? { qty: "", cost: "" };
+      if (!checked) {
+        const next = { ...current };
+        CUSTOM_KEYS.forEach((key) => delete next[key]);
+        return { ...prev, [rowId]: next };
+      }
+      const auto = toNumber(current.qty) * toNumber(current.cost);
+      return {
+        ...prev,
+        [rowId]: {
+          ...current,
+          customPricing: true,
+          customMethod: "manual",
+          customAmount: auto > 0 ? auto.toFixed(2) : "",
+        },
+      };
+    });
+    if (checked) setCalcTarget({ sectionId, rowId, fresh: true, procRow: true });
+  };
+
   const handleCalcApply = (patch: CustomPricingFields) => {
     if (!calcTarget) return;
     if (calcTarget.proc) {
       const { sectionId } = calcTarget;
       setProcSectionCustom((prev) => ({ ...prev, [sectionId]: { ...prev[sectionId], ...patch } }));
+    } else if (calcTarget.procRow) {
+      setProcRows((prev) => ({ ...prev, [calcTarget.rowId]: { ...prev[calcTarget.rowId], ...patch } }));
     } else {
       updateCustom(calcTarget.sectionId, calcTarget.rowId, patch);
     }
@@ -728,12 +1040,27 @@ export function JobFillUpFormDialog({
     // Cancelled right after ticking -> untick again
     if (calcTarget?.fresh) {
       if (calcTarget.proc) toggleProcSectionCustom(calcTarget.sectionId, false);
+      else if (calcTarget.procRow) toggleProcRowCustom(calcTarget.sectionId, calcTarget.rowId, false);
       else toggleCustom(calcTarget.sectionId, calcTarget.rowId, false);
     }
     setCalcTarget(null);
   };
 
   // Helper to increment/decrement numeric values
+
+  // Divisor up/down buttons: blank counts as the default 100, never goes below 1
+  const adjustDepFactor = (sectionId: string, rowId: string, current: string | undefined, delta: number) => {
+    const base = toNumber(current) > 0 ? toNumber(current) : 100;
+    updateRow(sectionId, rowId, "toolDepFactor", formatDecimal(Math.max(1, base + delta)));
+  };
+
+  // Subtotal multiplier up/down buttons: blank counts as ×1, steps of 0.05, never below 0.01
+  const adjustSectionMult = (sectionId: string, delta: number) =>
+    setProcSectionMult((prev) => {
+      const base = toNumber(prev[sectionId]) > 0 ? toNumber(prev[sectionId]) : 1;
+      return { ...prev, [sectionId]: Math.max(0.01, base + delta).toFixed(2) };
+    });
+
   const adjustValue = (current: string, delta: number, setter: (val: string) => void) => {
     const num = toNumber(current);
     const newVal = Math.max(0, num + delta);
@@ -851,16 +1178,18 @@ export function JobFillUpFormDialog({
   };
 
   const summary = useMemo(
-    () => computeSummary(boqSections, contingencyPct, unitCount),
-    [boqSections, contingencyPct, unitCount]
+    () => computeSummary(boqSections, contingencyPct, unitCount, workingDays),
+    [boqSections, contingencyPct, unitCount, workingDays]
   );
 
   /* ── PROCUREMENT ── */
   const procSummary = useMemo(
-    () => computeProcurementSummary(boqSections, procRows, procWarrantyPct, procContingencyPct, procMarkup, procSectionCustom),
-    [boqSections, procRows, procWarrantyPct, procContingencyPct, procMarkup, procSectionCustom]
+    () => computeProcurementSummary(
+      boqSections, procRows, procWarrantyPct, procContingencyPct, procMarkup, procSectionCustom, procSayRoundTo, workingDays, procSectionMult
+    ),
+    [boqSections, procRows, procWarrantyPct, procContingencyPct, procMarkup, procSectionCustom, procSayRoundTo, workingDays, procSectionMult]
   );
-  const hasAnyProc = boqSections.some((s) => s.rows.some((r) => procRowEntered(procRows[r.id])));
+  const hasAnyProc = boqSections.some((s) => s.rows.some((r) => procRowEntered(procRows[r.id], r)));
 
   const updateProc = (rowId: string, key: keyof ProcurementRow, value: string) =>
     setProcRows((prev) => ({ ...prev, [rowId]: { ...prev[rowId], [key]: value } }));
@@ -890,7 +1219,10 @@ export function JobFillUpFormDialog({
     if (!section) return;
 
     // "7,800.00" / "₱780" -> "7800.00" / "780.00"
-    const clean = (v?: string) => formatDecimal(sanitizeDecimal((v ?? "").replace(/[^0-9.]/g, "")));
+    const clean = (v?: string) => {
+  const s = sanitizeDecimal((v ?? "").replace(/[^0-9.]/g, ""));
+  return formatDecimal(s); // now keeps >2 decimals
+};
 
     const targets = section.rows.slice(rowIdx, rowIdx + grid.length);
 
@@ -918,12 +1250,62 @@ export function JobFillUpFormDialog({
     }
   };
 
+    // Paste a block from Excel into the engineering BOQ cells, starting at the clicked row + column
+  const handleBoqCellPaste = (
+    e: React.ClipboardEvent<HTMLElement>,
+    sectionId: string,
+    rowIdx: number,
+    startCol: number
+  ) => {
+    if (locked) return;
+
+    const text = e.clipboardData.getData("text");
+    // Single value -> let the normal paste happen
+    if (!text.includes("\t") && !text.includes("\n")) return;
+
+    let grid = parseTsv(text);
+    while (grid.length && grid[grid.length - 1].every((c) => !c?.trim())) grid = grid.slice(0, -1);
+    if (grid.length === 0 || (grid.length === 1 && grid[0].length === 1)) return;
+
+    e.preventDefault();
+    e.stopPropagation(); // don't trigger the BOQ import paste
+
+    const clean = (v?: string) => formatDecimal(sanitizeDecimal((v ?? "").replace(/[^0-9.]/g, "")));
+    let added = 0;
+
+    setBoqSections((prev) =>
+      prev.map((s) => {
+        if (s.id !== sectionId) return s;
+
+        const rows = s.rows.map((r) => ({ ...r }));
+        // Not enough rows below the clicked one -> add empty rows
+        while (rows.length < rowIdx + grid.length) {
+          rows.push(newBoqRow());
+          added++;
+        }
+
+        grid.forEach((cells, i) => {
+          const target = rows[rowIdx + i];
+          cells.forEach((cell, j) => {
+            const key = ENG_PASTE_COLS[startCol + j];
+            if (!key) return;
+            target[key] = key === "description" || key === "unit" ? (cell ?? "").trim() : clean(cell);
+          });
+        });
+
+        return { ...s, rows };
+      })
+    );
+
+    toast.success(`Pasted ${grid.length} item(s)${added ? ` (added ${added} new row${added > 1 ? "s" : ""})` : ""}`);
+  };
+
   const buildProcurement = (): ProcurementData => {
     const rows: Record<string, ProcurementRow> = {};
     boqSections.forEach((s) =>
       s.rows.forEach((r) => {
         const p = procRows[r.id];
-        if (procRowEntered(p)) rows[r.id] = { ...p };
+        if (procRowEntered(p, r)) rows[r.id] = { ...(p ?? { qty: "", cost: "" }) };
       })
     );
     return {
@@ -931,8 +1313,12 @@ export function JobFillUpFormDialog({
       warrantyPct: procWarrantyPct,
       contingencyPct: procContingencyPct,
       markup: procMarkup,
+      sayRoundTo: procSayRoundTo,
       sectionCustom: procSectionCustom,
-      summary: computeProcurementSummary(boqSections, rows, procWarrantyPct, procContingencyPct, procMarkup, procSectionCustom),
+      sectionMultiplier: procSectionMult,
+      summary: computeProcurementSummary(
+        boqSections, rows, procWarrantyPct, procContingencyPct, procMarkup, procSectionCustom, procSayRoundTo, workingDays, procSectionMult
+      ),
     };
   };
 
@@ -940,6 +1326,7 @@ export function JobFillUpFormDialog({
     setIsSavingProc(true);
     try {
       await onSaveProcurement?.(buildProcurement());
+      UNSAVED_CACHE.delete(cacheKey);
       toast.success("Procurement data saved");
     } catch (err) {
       console.error("PROCUREMENT_SAVE_ERROR", err);
@@ -992,6 +1379,7 @@ export function JobFillUpFormDialog({
     setCollapsedIds([]);
     setContingencyPct(DEFAULT_CONTINGENCY);
     setUnitCount(DEFAULT_UNIT_COUNT);
+    setProcSectionMult({});
   };
 
   const handleSubmit = async () => {
@@ -1003,14 +1391,20 @@ export function JobFillUpFormDialog({
     // Drop completely empty rows, and sections that have neither a title nor rows.
     // Computed totals are frozen into each row so they are saved with the form.
     const cleanedBoq = boqSections
-      .map((s) => ({ ...s, rows: s.rows.filter((r) => !isRowEmpty(r)).map(finalizeRow) }))
+      .map((s) => ({
+        ...s,
+        rows: s.rows
+          .filter((r) => !isRowEmpty(r))
+          .map((r) => finalizeRow(r, workingDays, isToolsSection(s), isRentalSection(s))),
+      }))
       .filter((s) => s.title.trim() || s.rows.length > 0);
 
-    const finalSummary = computeSummary(cleanedBoq, contingencyPct, unitCount);
+    const finalSummary = computeSummary(cleanedBoq, contingencyPct, unitCount, workingDays);
 
     setIsSubmitting(true);
     try {
       await onSubmit?.(values, cleanedBoq, finalSummary, canEditProc ? buildProcurement() : undefined);
+      UNSAVED_CACHE.delete(cacheKey);
       toast.success("Fill up form saved as draft");
       onOpenChange(false);
     } catch (err) {
@@ -1022,14 +1416,14 @@ export function JobFillUpFormDialog({
   };
 
   const numericInputClass = "h-9 rounded-lg text-[12px] font-medium text-right tabular-nums";
-  const autoInputClass =
-    "h-9 rounded-lg text-[12px] font-bold text-right tabular-nums bg-slate-50 text-slate-700";
+const autoInputClass =
+  "h-9 rounded-lg text-[12px] font-bold text-right tabular-nums bg-emerald-50 text-emerald-800 border-emerald-200 disabled:opacity-100 placeholder:text-emerald-600";
+// disabled tool fields (Usage / Dep. Years / Divisor) turn green when not applicable
+const toolInputClass = (disabled: boolean) => (disabled ? autoInputClass : numericInputClass);
   const procInputClass =
     "h-9 rounded-lg text-[12px] font-medium text-right tabular-nums bg-amber-50/60 border-amber-200";
   const procAutoClass =
     "h-9 rounded-lg text-[12px] font-bold text-right tabular-nums bg-amber-50 text-amber-800 border-amber-200";
-  const procCustomClass =
-    "h-9 rounded-lg text-[12px] font-bold text-right tabular-nums bg-amber-100 text-amber-900 border-amber-400 disabled:opacity-100";
 
   const customInputClass =
     "h-9 rounded-lg text-[12px] font-bold text-right tabular-nums bg-amber-50 border-amber-300 text-amber-900";
@@ -1044,7 +1438,7 @@ export function JobFillUpFormDialog({
     onDecrement,
     disabled,
     className,
-    ariaLabel,
+    "aria-label": ariaLabel,
   }: {
     value: string;
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -1052,7 +1446,7 @@ export function JobFillUpFormDialog({
     onDecrement: () => void;
     disabled?: boolean;
     className?: string;
-    ariaLabel?: string;
+    "aria-label"?: string;
   }) => (
     <div className="flex items-center">
       <Input
@@ -1269,21 +1663,45 @@ export function JobFillUpFormDialog({
               )}
 
               {boqSections.map((section, sIdx) => {
-                const sub = sectionSubtotals(section);
+                const isTools = isToolsSection(section);
+                const isRental = isRentalSection(section);
+                const procSticky = isRental ? PROC_STICKY_RENTAL : PROC_STICKY;
+                const sectionMinW = showProcurement
+              ? isTools ? "min-w-[2740px]" : isRental ? "min-w-[2458px]" : "min-w-[2190px]"
+              : isTools ? "min-w-[2050px]" : isRental ? "min-w-[1700px]" : "min-w-[1500px]";
+                const sub = sectionSubtotals(section, workingDays);
+                const sectionGrid = showProcurement
+                  ? (isTools ? BOQ_GRID_PROC_TOOLS : isRental ? BOQ_GRID_PROC_RENTAL : BOQ_GRID_PROC)
+                  : (isTools ? BOQ_GRID_TOOLS : isRental ? BOQ_GRID_RENTAL : BOQ_GRID);
                 const isCollapsed = collapsedIds.includes(section.id);
-                const procSub = sectionProcTotal(section, procRows, procSectionCustom);
-                const procCustom = procSectionCustom[section.id];
-                const procHas = section.rows.some((r) => procRowEntered(procRows[r.id]));
+                const procSub = sectionProcTotal(section, procRows, procSectionCustom, workingDays, procSectionMult);
+                const procHas = section.rows.some((r) => procRowEntered(procRows[r.id], r));
                 const procVar = sub.total - procSub;
+
+                                const titleLocked = !!section.titleLocked && isStandardTitle(section.title);
+                const titleKind = isStandardTitle(section.title)
+                  ? "standard"
+                  : section.title.trim()
+                  ? "custom"
+                  : "empty";
+                const barClass =
+                  titleKind === "standard"
+                    ? "bg-emerald-100/70 border-b border-emerald-200/60"
+                    : titleKind === "custom"
+                    ? "bg-amber-100/70 border-b border-amber-200/60"
+                    : "bg-rose-100/70 border-b border-rose-200/60";
+                const numClass =
+                  titleKind === "standard" ? "text-emerald-700" : titleKind === "custom" ? "text-amber-700" : "text-rose-700";
 
                 return (
                   <div
                     key={section.id}
                     id={`boq-section-${section.id}`}
-                    className="border border-slate-200 rounded-xl overflow-hidden scroll-mt-14"
+                    className="border border-slate-200 rounded-xl overflow-clip scroll-mt-28"
                   >
                     {/* Section title bar: roman numeral + typed title */}
-                    <div className="flex items-center gap-3 px-3 py-2 bg-rose-100/70 border-b border-rose-200/60">
+                    <div className="sticky top-[49px] z-[15] bg-white">
+                    <div className={`flex items-center gap-3 px-3 py-2 ${barClass}`}>
                       <Button
                         type="button"
                         variant="ghost"
@@ -1295,18 +1713,48 @@ export function JobFillUpFormDialog({
                       >
                         {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
                       </Button>
-                      <span className="shrink-0 min-w-[32px] text-[13px] font-black text-rose-700">
+                      <span className={`shrink-0 min-w-[32px] text-[13px] font-black ${numClass}`}>
                         {toRoman(sIdx + 1)}.
                       </span>
+                      <select
+                        value={titleLocked ? section.title : ""}
+                        onChange={(e) => pickStandardTitle(section.id, e.target.value)}
+                        disabled={locked}
+                        aria-label={`Section ${toRoman(sIdx + 1)} standard title`}
+                        title="Pick a standard title (locks the field) or leave on Custom to type your own"
+                        className="h-9 w-[210px] shrink-0 rounded-lg border border-input bg-white px-2 text-[11px] font-bold uppercase disabled:opacity-100 disabled:cursor-default"
+                      >
+                        <option value="">Custom (type your own)</option>
+                        {STANDARD_SECTION_TITLES.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
                       <Input
                         id={`boq-title-${section.id}`}
                         value={section.title}
                         onChange={(e) => updateSectionTitle(section.id, e.target.value)}
-                        placeholder="Section title (e.g. GENERAL REQUIREMENTS)"
-                        disabled={locked}
+                        placeholder="Custom section title (or pick a standard one on the left)"
+                        disabled={locked || titleLocked}
                         aria-label={`Section ${toRoman(sIdx + 1)} title`}
-                        className="h-9 flex-1 rounded-lg bg-white text-[12px] font-bold uppercase"
+                        className={`h-9 flex-1 rounded-lg text-[12px] font-bold uppercase disabled:opacity-100 disabled:cursor-default ${
+                          titleKind === "standard"
+                            ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+                            : titleKind === "custom"
+                            ? "bg-amber-50 border-amber-300 text-amber-900"
+                            : "bg-white"
+                        }`}
                       />
+                      {titleKind !== "empty" && (
+                        <span
+                          className={`shrink-0 rounded-md px-2 py-1 text-[9px] font-black uppercase tracking-wider ${
+                            titleKind === "standard" ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"
+                          }`}
+                        >
+                          {titleKind === "standard" ? "Standard" : "Custom"}
+                        </span>
+                      )}
                       {isCollapsed && (
                         <span className="shrink-0 text-[10px] font-bold text-rose-700/80 tabular-nums">
                           {section.rows.filter((r) => !isRowEmpty(r)).length} items · {peso(sub.total)}
@@ -1325,27 +1773,73 @@ export function JobFillUpFormDialog({
                         </Button>
                       )}
                     </div>
+                    </div>
 
                     {!isCollapsed && (
                       <>
-                        <div className="overflow-x-auto">
-                          <div className={showProcurement ? "min-w-[2190px]" : "min-w-[1500px]"}>
-                            {/* Column header */}
-                            <div className={`${gridClass} px-3 py-2 bg-slate-50 border-b border-slate-200 items-end`}>
+                        {/* Sticky column header (outside the scroller, synced with horizontal scroll) */}
+                        <div
+                          id={`boq-hdr-${section.id}`}
+                          className="sticky top-[101px] z-[14] overflow-hidden bg-slate-50 border-b border-slate-200"
+                        >
+                        <div className={sectionMinW}>
+                            <div className={`${sectionGrid} px-3 py-2 items-end`}>
                               {showProcurement ? (
-                                <div className={`${PROC_STICKY} -my-2 py-2 items-end bg-slate-50`}>
+                                <div data-hdr-sticky className={`${procSticky} -my-2 py-2 items-end bg-slate-50`}>
                                   <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Item No.</span>
                                   <span className="text-[9px] font-black uppercase tracking-widest text-amber-600 text-right">Procurement Qty</span>
                                   <span className="text-[9px] font-black uppercase tracking-widest text-amber-600 text-right">Procurement Acquired Cost</span>
+                                  {isRental && (
+                                    <span className="flex items-end justify-end gap-1 text-[9px] font-black uppercase tracking-widest text-amber-600 text-right">
+                                      Mob/Demob
+                                      <InfoTip label="About Mob/Demob">
+                                        <p className="mb-1 text-[10px] font-black uppercase tracking-wider text-sky-300">Heavy Equipment Rental (Procurement)</p>
+                                        <p>(Qty × Acquired Cost + Mob/Demob) × 1.12</p>
+                                        <p className="mt-1 text-sky-200">Mob/Demob is a flat amount added once per item (not multiplied by Qty). The 1.12 VAT applies to the whole amount, including Mob/Demob.</p>
+                                      </InfoTip>
+                                    </span>
+                                  )}
                                   <span className="text-[9px] font-black uppercase tracking-widest text-amber-600 text-right">Procurement Total Amount</span>
                                   <span className="text-[9px] font-black uppercase tracking-widest text-amber-600 text-right pr-1">Variance</span>
                                 </div>
                               ) : (
-                                <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Item No.</span>
+                                <span
+                                  data-hdr-sticky
+                                  className="relative z-[3] -ml-3 -mr-2 -my-2 py-2 pl-3 pr-2 self-stretch flex items-end bg-slate-50 text-[9px] font-black uppercase tracking-widest text-slate-400"
+                                >
+                                  Item No.
+                                </span>
                               )}
                               <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Description</span>
                               <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Quantity</span>
                               <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Unit</span>
+                              {isTools && (
+                                <>
+                                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Tool Type</span>
+                                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">How Many Usage</span>
+                                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">Depreciation Years</span>
+                                  <span className="flex items-center justify-end gap-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                                    Divisor
+                                    <InfoTip label="About the divisor">
+                                      <p className="mb-1 text-[10px] font-black uppercase tracking-wider text-sky-300">Power Tools / Safety Equipment</p>
+                                      <p>(Cost ÷ (Depreciation Years × Divisor)) × Working Days ({workingDays || 0}) × Qty</p>
+                                      <p className="mt-1 text-sky-200">Default divisor is 100. Leave it as is, or change it per item.</p>
+                                      <p className="mt-2 mb-1 text-[10px] font-black uppercase tracking-wider text-sky-300">Hand Tools</p>
+                                      <p>(Qty × Cost) ÷ Usage</p>
+                                    </InfoTip>
+                                  </span>
+                                </>
+                              )}
+                              {isRental && (
+                                <span className="flex items-center justify-end gap-1 text-[9px] font-black uppercase tracking-widest text-slate-400">
+                                  + Mobilization Fee
+                                  <InfoTip label="About the mobilization fee">
+                                    <p className="mb-1 text-[10px] font-black uppercase tracking-wider text-sky-300">Heavy Equipment Rental</p>
+                                    <p>(Qty × Material Cost) + Mobilization Fee</p>
+                                    <p className="mt-1 text-sky-200">Use the Mobilization Fee for flat mobilization/demobilization charges. It is added once per item, not multiplied by Qty.</p>
+                                  </InfoTip>
+                                </span>
+                              )}
                               {MONEY_COLUMNS.map((c) => (
                                 <span key={c.key} className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-right">
                                   {c.label}
@@ -1353,16 +1847,38 @@ export function JobFillUpFormDialog({
                               ))}
                               <span />
                             </div>
+                          </div>
+                        </div>
+                        <div
+                          className="overflow-x-auto"
+                          onScroll={(e) => {
+                            const x = e.currentTarget.scrollLeft;
+                            const hdr = document.getElementById(`boq-hdr-${section.id}`);
+                            const inner = hdr?.firstElementChild as HTMLElement | null;
+                            if (inner) inner.style.transform = `translateX(${-x}px)`;
+                            hdr?.querySelectorAll<HTMLElement>("[data-hdr-sticky]").forEach((el) => {
+                              el.style.transform = `translateX(${x}px)`;
+                            });
+                          }}
+                        >
+                          <div className={sectionMinW}>
 
                             {/* Rows */}
                             <div className="divide-y divide-slate-100">
                               {section.rows.map((row, rIdx) => {
-                                const totals = rowTotals(row);
+                                const totals = rowTotals(row, workingDays, isTools, isRental);
+                                if (isRental) console.log("RENTAL ROW", { qty: row.qty, material: row.materialCost, fee: row.rentalFee, custom: row.customPricing, totals });
+                                const procurementRow = procRows[row.id];
+                                const procTotal = procRowTotal(procurementRow, row, workingDays, isTools, isRental);
 
                                 return (
-                                  <div key={row.id} className={`${gridClass} px-3 py-2`}>
-                                    <div className={showProcurement ? `${PROC_STICKY} -my-2 py-2 items-start bg-white` : "contents"}>
-                                    <div className="flex flex-col items-start gap-1 pt-2">
+                                  <div key={row.id} className={`${sectionGrid} px-3 py-2`}>
+                                    <div className={showProcurement ? `${procSticky} -my-2 py-2 items-start bg-white` : "contents"}>
+                                    <div
+  className={`flex flex-col items-start gap-1 pt-2 ${
+    showProcurement ? "" : "sticky left-0 z-[5] -ml-3 -mr-2 -my-2 py-2 pl-3 pr-2 self-stretch bg-white"
+  }`}
+>
                                       <span className="text-[11px] font-black text-slate-500">{rIdx + 1}</span>
                                       {!readOnly && (
                                         <div className="flex items-center gap-1">
@@ -1401,7 +1917,7 @@ export function JobFillUpFormDialog({
                                           value={procRows[row.id]?.qty ?? ""}
                                           inputMode="decimal"
                                           onChange={(e) => updateProc(row.id, "qty", sanitizeDecimal(e.target.value))}
-                                          onBlur={() => updateProc(row.id, "qty", formatDecimal(procRows[row.id]?.qty ?? ""))}
+                                          onBlur={(e) => updateProc(row.id, "qty", formatDecimal(e.target.value))}
                                           onPaste={(e) => handleProcPaste(e, section.id, rIdx, 0)}
                                           placeholder="0.00"
                                           disabled={!canEditProc}
@@ -1412,29 +1928,49 @@ export function JobFillUpFormDialog({
                                           value={procRows[row.id]?.cost ?? ""}
                                           inputMode="decimal"
                                           onChange={(e) => updateProc(row.id, "cost", sanitizeDecimal(e.target.value))}
-                                          onBlur={() => updateProc(row.id, "cost", formatDecimal(procRows[row.id]?.cost ?? ""))}
+                                          onBlur={(e) => updateProc(row.id, "cost", formatDecimal(e.target.value))}
                                           onPaste={(e) => handleProcPaste(e, section.id, rIdx, 1)}
                                           placeholder="0.00"
                                           disabled={!canEditProc}
                                           aria-label={`Procurement acquired cost item ${rIdx + 1}`}
                                           className={procInputClass}
                                         />
-                                        <Input
-                                          value={num2(procRowTotal(procRows[row.id], row))}
-                                          disabled
-                                          title="Auto-computed (read-only)"
-                                          aria-label={`Procurement total amount item ${rIdx + 1}`}
-                                          className={procAutoClass}
-                                        />
-                                            <span
-                                              className={`pt-2.5 pr-1 text-right text-[12px] font-black tabular-nums whitespace-nowrap ${
-                                                procRowEntered(procRows[row.id])
-                                                  ? varianceClass(totals.totalAmount - procRowTotal(procRows[row.id], row))
-                                                  : ""
-                                              }`}
-                                            >
-                                          {procRowEntered(procRows[row.id])
-                                            ? signedPeso(totals.totalAmount - procRowTotal(procRows[row.id], row))
+                                        {isRental && (
+                                          <Input
+                                            value={procRows[row.id]?.mobDemob ?? ""}
+                                            inputMode="decimal"
+                                            onChange={(e) => updateProc(row.id, "mobDemob", sanitizeDecimal(e.target.value))}
+                                            onBlur={(e) => updateProc(row.id, "mobDemob", formatDecimal(e.target.value))}
+                                            placeholder="0.00"
+                                            disabled={!canEditProc}
+                                            aria-label={`Mob/Demob item ${rIdx + 1}`}
+                                            className={procInputClass}
+                                          />
+                                        )}
+                                        <div className="flex flex-col gap-1">
+                                          <Input
+                                            value={num2(procTotal)}
+                                            disabled
+                                            title={
+                                              isTools && usesEngineeringTotalForProcurement(row)
+                                                ? "Copied from Engineering total amount"
+                                                : isRental
+                                                ? "(Qty × Cost + Mob/Demob) × 1.12"
+                                                : "Auto-computed (read-only)"
+                                            }
+                                            aria-label={`Procurement total amount item ${rIdx + 1}`}
+                                            className={procAutoClass}
+                                          />
+                                        </div>
+                                        <span
+                                          className={`pt-2.5 pr-1 text-right text-[12px] font-black tabular-nums whitespace-nowrap ${
+                                            procRowEntered(procRows[row.id], row)
+                                              ? varianceClass(totals.totalAmount - procTotal)
+                                              : ""
+                                          }`}
+                                        >
+                                          {procRowEntered(procRows[row.id], row)
+                                            ? signedPeso(totals.totalAmount - procTotal)
                                             : ""}
                                         </span>
                                       </>
@@ -1447,8 +1983,11 @@ export function JobFillUpFormDialog({
                                       placeholder="Item description (you can use multiple lines)"
                                       rows={2}
                                       disabled={locked}
+                                         onPaste={(e) => handleBoqCellPaste(e, section.id, rIdx, ENG_COL_INDEX.description)}
                                       aria-label={`Description item ${rIdx + 1}`}
-                                      className="min-h-[56px] rounded-lg text-[12px] font-medium"
+                                      className={`min-h-[56px] rounded-lg text-[12px] font-medium ${
+  showProcurement ? "" : "bg-white sticky left-[80px] z-[5] shadow-[4px_0_6px_-4px_rgba(0,0,0,0.15)]"
+}`}
                                     />
 
                                     {/* Quantity */}
@@ -1459,6 +1998,7 @@ export function JobFillUpFormDialog({
                                       onBlur={() => updateRow(section.id, row.id, "qty", formatDecimal(row.qty))}
                                       placeholder="0.00"
                                       disabled={locked}
+                                      onPaste={(e) => handleBoqCellPaste(e, section.id, rIdx, ENG_COL_INDEX.qty)}
                                       aria-label={`Quantity item ${rIdx + 1}`}
                                       className={numericInputClass}
                                     />
@@ -1469,9 +2009,105 @@ export function JobFillUpFormDialog({
                                       onChange={(e) => updateRow(section.id, row.id, "unit", e.target.value)}
                                       placeholder="pcs"
                                       disabled={locked}
+                                      onPaste={(e) => handleBoqCellPaste(e, section.id, rIdx, ENG_COL_INDEX.unit)}
                                       aria-label={`Unit item ${rIdx + 1}`}
                                       className="h-9 rounded-lg text-[12px] font-medium"
                                     />
+
+                                     {/* TOOLS only: Tool Type + exclusive Usage / Depreciation Years */}
+                                    {isTools && (
+                                      <>
+                                        <select
+                                          value={row.toolType ?? ""}
+                                          onChange={(e) =>
+                                            patchRow(section.id, row.id, (r) => ({
+                                              ...r,
+                                              toolType: e.target.value,
+                                              toolUsage: "",
+                                              toolDepYears: "",
+                                              toolDepFactor: "",
+                                            }))
+                                          }
+                                          disabled={locked}
+                                          aria-label={`Tool type item ${rIdx + 1}`}
+                                          className="h-9 w-full rounded-lg border border-input bg-white px-2 text-[11px] font-medium disabled:opacity-100 disabled:cursor-default"
+                                        >
+                                          <option value="">Select type</option>
+                                          {TOOL_TYPES.map((t) => (
+                                            <option key={t.value} value={t.value}>
+                                              {t.label}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        <Input
+                                          value={row.toolUsage ?? ""}
+                                          inputMode="decimal"
+                                          onChange={(e) => updateRow(section.id, row.id, "toolUsage", sanitizeDecimal(e.target.value))}
+                                          onBlur={() => updateRow(section.id, row.id, "toolUsage", formatDecimal(row.toolUsage ?? ""))}
+                                          placeholder={row.toolType === "hand" ? "0.00" : "—"}
+                                         disabled={locked || row.toolType !== "hand"}
+                                          aria-label={`Usage item ${rIdx + 1}`}
+                                          className={toolInputClass(locked || row.toolType !== "hand")}
+                                        />
+                                        <Input
+                                          value={row.toolDepYears ?? ""}
+                                          inputMode="decimal"
+                                          onChange={(e) => updateRow(section.id, row.id, "toolDepYears", sanitizeDecimal(e.target.value))}
+                                          onBlur={() => updateRow(section.id, row.id, "toolDepYears", formatDecimal(row.toolDepYears ?? ""))}
+                                          placeholder={row.toolType === "power" || row.toolType === "safety" ? "0.00" : "—"}
+                                          disabled={locked || (row.toolType !== "power" && row.toolType !== "safety")}
+                                          aria-label={`Depreciation years item ${rIdx + 1}`}
+                                          className={toolInputClass(locked || (row.toolType !== "power" && row.toolType !== "safety"))}
+                                        />
+                                        <div className="flex items-center">
+                                          <Input
+                                            value={row.toolDepFactor ?? ""}
+                                            inputMode="decimal"
+                                            onChange={(e) => updateRow(section.id, row.id, "toolDepFactor", sanitizeDecimal(e.target.value))}
+                                            onBlur={() => updateRow(section.id, row.id, "toolDepFactor", formatDecimal(row.toolDepFactor ?? ""))}
+                                            placeholder={row.toolType === "power" || row.toolType === "safety" ? "100" : "—"}
+                                            disabled={locked || (row.toolType !== "power" && row.toolType !== "safety")}
+                                            aria-label={`Depreciation divisor item ${rIdx + 1}`}
+                                            title="Blank = 100"
+                                            className={`${toolInputClass(locked || (row.toolType !== "power" && row.toolType !== "safety"))} min-w-0 flex-1`}
+                                          />
+                                          {!locked && (row.toolType === "power" || row.toolType === "safety") && (
+                                            <div className="flex flex-col ml-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => adjustDepFactor(section.id, row.id, row.toolDepFactor, 1)}
+                                                className="h-3.5 w-4 flex items-center justify-center hover:bg-slate-200 rounded-t text-slate-500 hover:text-slate-900 transition-colors"
+                                                aria-label="Increase divisor"
+                                              >
+                                                <ChevronUp size={10} strokeWidth={3} />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => adjustDepFactor(section.id, row.id, row.toolDepFactor, -1)}
+                                                className="h-3.5 w-4 flex items-center justify-center hover:bg-slate-200 rounded-b text-slate-500 hover:text-slate-900 transition-colors"
+                                                aria-label="Decrease divisor"
+                                              >
+                                                <ChevronDown size={10} strokeWidth={3} />
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </>
+                                    )}
+
+                                    {/* HEAVY EQUIPMENT RENTAL only: flat Mobilization Fee */}
+                                    {isRental && (
+                                      <Input
+                                        value={row.rentalFee ?? ""}
+                                        inputMode="decimal"
+                                        onChange={(e) => updateRow(section.id, row.id, "rentalFee", sanitizeDecimal(e.target.value))}
+                                        onBlur={() => updateRow(section.id, row.id, "rentalFee", formatDecimal(row.rentalFee ?? ""))}
+                                        placeholder="0.00"
+                                        disabled={locked}
+                                        aria-label={`Mobilization fee item ${rIdx + 1}`}
+                                        className={numericInputClass}
+                                      />
+                                    )}
 
                                     {/* Money columns: inputs are typed, totals are auto-computed (read-only) */}
                                     {MONEY_COLUMNS.map((c) => {
@@ -1483,19 +2119,11 @@ export function JobFillUpFormDialog({
                                             inputMode="decimal"
                                             onChange={(e) => updateRow(section.id, row.id, c.key, sanitizeDecimal(e.target.value))}
                                             onBlur={() => updateRow(section.id, row.id, c.key, formatDecimal(row[c.key]))}
+                                            onPaste={(e) => handleBoqCellPaste(e, section.id, rIdx, ENG_COL_INDEX[c.key])}
                                             placeholder="0.00"
-                                            disabled={locked || (c.key === "materialCost" && isManualCustom(row))}
-                                            title={
-                                              c.key === "materialCost" && isManualCustom(row)
-                                                ? "Not used: this row has a typed Total Material Cost"
-                                                : undefined
-                                            }
+                                            disabled={locked}
                                             aria-label={`${c.label} item ${rIdx + 1}`}
-                                            className={
-                                              c.key === "materialCost" && isManualCustom(row)
-                                                ? `${numericInputClass} opacity-40`
-                                                : numericInputClass
-                                            }
+                                            className={numericInputClass}
                                           />
                                         );
                                       }
@@ -1504,7 +2132,7 @@ export function JobFillUpFormDialog({
                                       if (c.key === "totalMaterialCost") {
                                         return (
                                           <div key={c.key} className="flex flex-col gap-1">
-                                            {isManualCustom(row) ? (
+                                            {allowBoqCustomPricing && isManualCustom(row) ? (
                                               <Input
                                                 value={row.customAmount ?? ""}
                                                 inputMode="decimal"
@@ -1523,40 +2151,43 @@ export function JobFillUpFormDialog({
                                               <Input
                                                 value={num2(totals[c.key])}
                                                 disabled={true}
-                                                title={row.customPricing ? "Computed by the custom calculator" : "Auto-computed (read-only)"}
+                                                title={allowBoqCustomPricing && row.customPricing ? "Computed by the custom calculator" : "Auto-computed (read-only)"}
                                                 aria-label={`${c.label} item ${rIdx + 1}`}
-                                                className={row.customPricing ? customAutoClass : autoInputClass}
+                                                className={allowBoqCustomPricing && row.customPricing ? customAutoClass : autoInputClass}
                                               />
                                             )}
-                                            <label
-                                              className={`flex items-center gap-1 text-[9px] font-black uppercase tracking-wider select-none ${
-                                                row.customPricing ? "text-amber-600" : "text-slate-400"
-                                              } ${locked ? "" : "cursor-pointer"}`}
-                                            >
-                                              <input
-                                                type="checkbox"
-                                                checked={!!row.customPricing}
-                                                disabled={locked}
-                                                onChange={(e) => toggleCustom(section.id, row.id, e.target.checked)}
-                                                className="size-3 accent-amber-500"
-                                              />
-                                              Custom pricing
-                                            </label>
-
-                                            {row.customPricing && (
+                                            {allowBoqCustomPricing && (
                                               <>
-                                                <button
-                                                  type="button"
-                                                  onClick={() => setCalcTarget({ sectionId: section.id, rowId: row.id, fresh: false })}
-                                                  title={`${customMethodLabel(customMethodOf(row))}${row.customNote ? ` · ${row.customNote}` : ""}\n${describeCustomFormula(row)} = ${peso(totals.totalMaterialCost)}`}
-                                                  className="flex w-full items-center justify-center gap-1 h-7 rounded-md border border-amber-300 bg-white text-[9px] font-black uppercase tracking-wider text-amber-700 hover:bg-amber-100"
+                                                <label
+                                                  className={`flex items-center gap-1 text-[9px] font-black uppercase tracking-wider select-none ${
+                                                    row.customPricing ? "text-amber-600" : "text-slate-400"
+                                                  } ${locked ? "" : "cursor-pointer"}`}
                                                 >
-                                                  <Calculator size={11} />
-                                                  {readOnly ? "View" : "Calculator"}
-                                                </button>
-                                                <p className="text-[9px] font-bold leading-tight text-amber-800 tabular-nums break-words">
-                                                  {describeCustomFormula(row)}
-                                                </p>
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={!!row.customPricing}
+                                                    disabled={locked}
+                                                    onChange={(e) => toggleCustom(section.id, row.id, e.target.checked)}
+                                                    className="size-3 accent-amber-500"
+                                                  />
+                                                  Custom pricing
+                                                </label>
+                                                {row.customPricing && (
+                                                  <>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => setCalcTarget({ sectionId: section.id, rowId: row.id, fresh: false })}
+                                                      title={`${customMethodLabel(customMethodOf(row))}${row.customNote ? ` · ${row.customNote}` : ""}\n${describeCustomFormula(row)} = ${peso(totals.totalMaterialCost)}`}
+                                                      className="flex w-full items-center justify-center gap-1 h-7 rounded-md border border-amber-300 bg-white text-[9px] font-black uppercase tracking-wider text-amber-700 hover:bg-amber-100"
+                                                    >
+                                                      <Calculator size={11} />
+                                                      {readOnly ? "View" : "Calculator"}
+                                                    </button>
+                                                    <p className="text-[9px] font-bold leading-tight text-amber-800 tabular-nums break-words">
+                                                      {describeCustomFormula(row)}
+                                                    </p>
+                                                  </>
+                                                )}
                                               </>
                                             )}
                                           </div>
@@ -1584,54 +2215,62 @@ export function JobFillUpFormDialog({
 
                             {/* Subtotal (auto-sum of the Total columns) */}
 {/* Subtotal (auto-sum of the Total columns) */}
-<div className={`${gridClass} px-3 py-2.5 bg-slate-50 border-t border-slate-200 items-center`}>
+<div className={`${sectionGrid} px-3 py-2.5 bg-slate-50 border-t border-slate-200 items-center`}>
   {showProcurement ? (
     // Same sticky group as the header/rows, so Procurement Total + Variance sit under their columns
-    <div className={`${PROC_STICKY} -my-2.5 py-2.5 items-center bg-slate-50`}>
-      <span className="col-span-3 text-right pr-2 text-[10px] font-black uppercase tracking-widest text-slate-500">
+    <div className={`${procSticky} -my-2.5 py-2.5 items-center bg-slate-50`}>
+      <div className={`${isRental ? "col-span-4" : "col-span-3"} flex items-center justify-end gap-1.5 pr-2 text-[10px] font-black uppercase tracking-widest text-slate-500`}>
         Subtotal Amount
-      </span>
+        <InfoTip label="About the subtotal multiplier">
+          <p className="mb-1 text-[10px] font-black uppercase tracking-wider text-sky-300">Procurement Subtotal</p>
+          <p>SUM of Procurement Total Amount × Multiplier</p>
+          <p className="mt-1 text-sky-200">Default is ×1 (no change). Use e.g. 1.15 or 1.25 to add 15% / 25% on top of this section's sum.</p>
+        </InfoTip>
+        <span className="inline-flex items-center normal-case">
+          <span className="mr-1 text-[11px] font-bold">×</span>
+          <Input
+            value={procSectionMult[section.id] ?? ""}
+            inputMode="decimal"
+            onChange={(e) =>
+              setProcSectionMult((prev) => ({ ...prev, [section.id]: sanitizeDecimal(e.target.value) }))
+            }
+            onBlur={() =>
+              setProcSectionMult((prev) => ({ ...prev, [section.id]: formatDecimal(prev[section.id] ?? "") }))
+            }
+            placeholder="1"
+            disabled={!canEditProc}
+            aria-label={`Subtotal multiplier section ${toRoman(sIdx + 1)}`}
+            title="Blank = ×1"
+            className="h-7 w-14 rounded-md text-[12px] font-bold text-right tabular-nums disabled:opacity-100"
+          />
+          {canEditProc && (
+            <span className="ml-1 flex flex-col">
+              <button
+                type="button"
+                onClick={() => adjustSectionMult(section.id, 0.05)}
+                className="h-3.5 w-4 flex items-center justify-center hover:bg-slate-200 rounded-t text-slate-500 hover:text-slate-900 transition-colors"
+                aria-label="Increase multiplier"
+              >
+                <ChevronUp size={10} strokeWidth={3} />
+              </button>
+              <button
+                type="button"
+                onClick={() => adjustSectionMult(section.id, -0.05)}
+                className="h-3.5 w-4 flex items-center justify-center hover:bg-slate-200 rounded-b text-slate-500 hover:text-slate-900 transition-colors"
+                aria-label="Decrease multiplier"
+              >
+                <ChevronDown size={10} strokeWidth={3} />
+              </button>
+            </span>
+          )}
+        </span>
+      </div>
       <div className="flex flex-col gap-1 py-0.5">
         <span
-          className={`text-right text-[12px] font-black tabular-nums whitespace-nowrap ${
-            procCustom?.customPricing ? "text-amber-900" : "text-amber-700"
-          }`}
-          title={procCustom?.customPricing ? "Computed by the custom calculator" : undefined}
+          className="text-right text-[12px] font-black tabular-nums whitespace-nowrap text-amber-700"
         >
           {peso(procSub)}
         </span>
-        {(canEditProc || procCustom?.customPricing) && (
-          <label
-            className={`flex items-center justify-end gap-1 text-[9px] font-black uppercase tracking-wider select-none ${
-              procCustom?.customPricing ? "text-amber-600" : "text-slate-400"
-            } ${canEditProc ? "cursor-pointer" : ""}`}
-          >
-            <input
-              type="checkbox"
-              checked={!!procCustom?.customPricing}
-              disabled={!canEditProc}
-              onChange={(e) => toggleProcSectionCustom(section.id, e.target.checked)}
-              className="size-3 accent-amber-500"
-            />
-            Custom pricing
-          </label>
-        )}
-        {procCustom?.customPricing && (
-          <>
-            <button
-              type="button"
-              onClick={() => setCalcTarget({ sectionId: section.id, rowId: "", fresh: false, proc: true })}
-              title={`${describeCustomFormula(procSectionAsCustomRow(section, procRows, procCustom))} = ${peso(procSub)}`}
-              className="flex w-full items-center justify-center gap-1 h-7 rounded-md border border-amber-300 bg-white text-[9px] font-black uppercase tracking-wider text-amber-700 hover:bg-amber-100"
-            >
-              <Calculator size={11} />
-              {canEditProc ? "Calculator" : "View"}
-            </button>
-            <p className="text-right text-[9px] font-bold leading-tight text-amber-800 tabular-nums break-words">
-              {describeCustomFormula(procSectionAsCustomRow(section, procRows, procCustom))}
-            </p>
-          </>
-        )}
       </div>
       <span
         className={`text-right pr-1 text-[12px] font-black tabular-nums whitespace-nowrap ${
@@ -1655,6 +2294,16 @@ export function JobFillUpFormDialog({
       <span />
     </>
   )}
+
+  {isTools && (
+    <>
+      <span />
+      <span />
+      <span />
+      <span />
+    </>
+  )}
+  {isRental && <span />}
 
   {/* Material Cost (input column, no subtotal) */}
   <span />
@@ -1725,7 +2374,7 @@ export function JobFillUpFormDialog({
                             onDecrement={() => adjustValue(contingencyPct, -1, setContingencyPct)}
                             disabled={locked}
                             className="h-7 w-16 rounded-md text-[12px] font-bold text-right tabular-nums"
-                            ariaLabel="Contingency percent"
+                            aria-label="Contingency percent"
                           />
                           <span className="text-[11px] font-bold">%</span>
                         </span>
@@ -1754,7 +2403,7 @@ export function JobFillUpFormDialog({
                             onDecrement={() => adjustValue(unitCount, -1, setUnitCount)}
                             disabled={locked}
                             className="h-7 w-16 rounded-md bg-white text-slate-900 text-[12px] font-bold text-right tabular-nums"
-                            ariaLabel="Number of units"
+                            aria-label="Number of units"
                           />
                         </span>
                       </>
@@ -1784,7 +2433,30 @@ export function JobFillUpFormDialog({
                       <>W/ Mark-up {procPctInput(procMarkup, setProcMarkup, "Mark-up multiplier", "×")}</>,
                       peso(procSummary.withMarkup)
                     )}
-                    {procLine("Say", peso(procSummary.say), true)}
+                    {procLine(
+                      <>
+                        Say
+                        <span className="inline-flex items-center gap-1 normal-case font-bold">
+                          <span className="text-[9px] opacity-75">round up to nearest</span>
+                          <select
+                            value={procSayRoundTo}
+                            onChange={(e) => setProcSayRoundTo(e.target.value)}
+                            disabled={!canEditProc}
+                            aria-label="Say rounding place"
+                            title="Choose the place value to round the Say amount up to"
+                            className="h-7 max-w-[190px] rounded-md border border-input bg-background px-2 text-[10px] font-bold disabled:opacity-60"
+                          >
+                            {SAY_ROUNDING_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </span>
+                      </>,
+                      peso(procSummary.say),
+                      true
+                    )}
                     {procLine(
                       "Variance (Eng. − Procurement)",
                       <span className={hasAnyProc ? varianceClass(procSummary.variance) : "text-slate-300"}>
@@ -1838,7 +2510,10 @@ export function JobFillUpFormDialog({
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => onOpenChange(false)}
+                  onClick={() => {
+                    UNSAVED_CACHE.delete(cacheKey);
+                    onOpenChange(false);
+                  }}
                   className="h-10 px-5 text-[10px] font-black uppercase tracking-wider"
                 >
                   Cancel
@@ -1919,8 +2594,14 @@ export function JobFillUpFormDialog({
           open={calcTarget !== null}
           onOpenChange={handleCalcOpenChange}
           row={calcRow}
-          readOnly={calcTarget?.proc ? !canEditProc : readOnly}
-          targetLabel={calcTarget?.proc ? "Procurement Subtotal Amount" : "Total Material Cost"}
+          readOnly={calcTarget?.proc || calcTarget?.procRow ? !canEditProc : readOnly}
+          targetLabel={
+            calcTarget?.procRow
+              ? "Procurement Total Amount"
+              : calcTarget?.proc
+              ? "Procurement Subtotal Amount"
+              : "Total Material Cost"
+          }
           onApply={handleCalcApply}
         />
       </DialogContent>

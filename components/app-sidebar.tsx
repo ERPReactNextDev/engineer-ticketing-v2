@@ -13,7 +13,7 @@ import { NavUser }      from "./nav-user"
 
 import { db } from "@/lib/firebase"
 import { collection, onSnapshot, doc, getDoc, getDocs, query } from "firebase/firestore"
-import { conxStorage } from "@/utils/storage-helper"
+import { conxStorage, clearAllCookies } from "@/utils/storage-helper"
 
 // Helper to make API calls to Supabase via API routes
 const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
@@ -312,6 +312,7 @@ export function AppSidebar({ userId, ...props }: AppSidebarProps) {
           // If forceLogout is true (Resigned/Terminated), clear session and redirect
           if (data.forceLogout) {
             await fetch(`${API_BASE}/api/logout`, { method: "POST" })
+            clearAllCookies()
             conxStorage.clear()
             window.location.href = "/login"
           }

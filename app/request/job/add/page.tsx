@@ -50,9 +50,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-// Database
-import { db } from "@/lib/firebase";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { createJobRequest } from "@/lib/job-request-supabase";
 
 // MapPicker component (client-side only for Leaflet)
 import dynamicImport from "next/dynamic";
@@ -84,10 +82,10 @@ export default function JobRequestWizard() {
     email: "",
     contactNumber: "",
     scopeOfWork: "",
+    scopeQty: "",
     mountingHeight: "",
     workingTimeFrom: "",
     workingTimeTo: "",
-    otherAssistance: "",
     otherDocuments: "",
     priority: "MEDIUM",
     tempFacility: "No",
@@ -100,6 +98,35 @@ export default function JobRequestWizard() {
   const [permits, setPermits] = useState<string[]>([]);
   const [workingDays, setWorkingDays] = useState<string[]>([]);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+
+  const validateStep = (step: number): string | null => {
+    if (step === 1 && (!siteInstallation.length || !inHouse.length)) {
+      return "Select at least one site installation and one item modification.";
+    }
+    if (step === 2) {
+      if (!formData.projectTitle.trim() || !formData.location.trim() || !formData.agentName.trim() || !formData.projectName.trim() || !formData.contactPerson.trim() || !formData.email.trim() || !formData.contactNumber.trim() || !formData.scopeOfWork.trim()) {
+        return "Complete all required project, location, and contact fields.";
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+        return "Enter a valid contact email address.";
+      }
+      const quantity = Number(formData.scopeQty);
+      if (!Number.isSafeInteger(quantity) || quantity < 1) {
+        return "Enter a whole-number quantity greater than zero.";
+      }
+    }
+    if (step === 3) {
+      if (!permits.length) return "Select at least one document needed for the work permit.";
+      if (!formData.otherDocuments.trim()) return "Enter other documents, or enter None if there are none.";
+      if (!workingDays.length) return "Select at least one working day.";
+      if (!formData.workingTimeFrom || !formData.workingTimeTo) return "Enter both start and end times for the working range.";
+      const start = new Date(formData.workingTimeFrom);
+      const end = new Date(formData.workingTimeTo);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return "Enter a valid working time range.";
+      if (end < start) return "The end time must be on or after the start time.";
+    }
+    return null;
+  };
 
   // CUSTOMER DATABASE STATES
   const [userDetails, setUserDetails] = useState<any>(null);
@@ -219,7 +246,9 @@ export default function JobRequestWizard() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        setFormData(prev => ({ ...prev, ...(parsed.formData || {}) }));
+        const draftFormData = { ...(parsed.formData || {}) };
+        delete draftFormData.otherAssistance;
+        setFormData(prev => ({ ...prev, ...draftFormData }));
         setSiteInstallation(parsed.siteInstallation || []);
         setInHouse(parsed.inHouse || []);
         setPermits(parsed.permits || []);
@@ -249,21 +278,13 @@ export default function JobRequestWizard() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        if (currentStep < 3) {
-          if (currentStep === 2) {
-            if (!formData.projectTitle?.trim() || !formData.location?.trim() || !formData.agentName?.trim() || !formData.projectName?.trim() || !formData.scopeOfWork?.trim()) {
-              return toast.error("Please fill in Project Title, Location, Agent Name, Project Name, and Scope of Work.");
-            }
-          }
-          setCurrentStep(prev => prev + 1);
-        } else if (currentStep === 3 && !isSubmitting) {
-          handleSubmit();
-        }
+        const selector = currentStep === 3 ? "[data-job-request-submit]" : "[data-job-request-next]";
+        document.querySelector<HTMLButtonElement>(selector)?.click();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [currentStep, formData, isSubmitting]);
+  }, [currentStep]);
 
   // Test mode toggle function
   const toggleTestMode = () => {
@@ -335,8 +356,12 @@ export default function JobRequestWizard() {
 
   const handleSubmit = async () => {
     if (isSubmitting || !userId) return;
-    if (!formData.projectTitle?.trim() || !formData.location?.trim() || !formData.agentName?.trim() || !formData.projectName?.trim()) {
-      return toast.error("Please fill in Project Title, Location, Agent Name, and Project Name.");
+    for (const step of [1, 2, 3]) {
+      const validationError = validateStep(step);
+      if (validationError) {
+        setCurrentStep(step);
+        return toast.error(validationError);
+      }
     }
 
     setIsSubmitting(true);
@@ -365,7 +390,7 @@ export default function JobRequestWizard() {
       const isTestMode = localStorage.getItem("testMode") === "true";
       const jobRequestNo = await getNextJobRequestNumber(isTestMode);
 
-      // 3. Save to Firestore
+      // 3. Save to Supabase
       const userName = localStorage.getItem("userName") || "Unknown User";
       const userRole = localStorage.getItem("userRole") || "MEMBER";
 
@@ -385,22 +410,23 @@ export default function JobRequestWizard() {
         console.error("Failed to fetch user details:", err);
       }
 
-      await addDoc(collection(db, "job_requests"), {
+      await createJobRequest({
         ...formData,
+        scopeQty: Number(formData.scopeQty),
         siteInstallation,
         inHouse,
         permits,
         workingDays,
         attachments: uploadedUrls,
-        jobRequestNo, // Unique sequential number: JR2026-0042
+        jobRequestNo,
         status: "JR FORM FORWARD TO ENGINEERING",
         createdBy: userReferenceId,
         createdBySignature: userSignature,
         submittedBy: userReferenceId,
         submittedByName: userName,
         submittedByRole: userRole,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
 
       // 4. Release the number reservation after successful save
@@ -542,13 +568,10 @@ export default function JobRequestWizard() {
                     <button 
                       key={step.id} 
                       onClick={() => {
-                        // Simple validation before allowing step jump
-                        if (currentStep === 1 && step.id > 1) {
-                          // Allow going to Scope without validation if coming from Assistance
-                        }
-                        if (currentStep === 2 && step.id > 2) {
-                          if (!formData.projectTitle?.trim() || !formData.location?.trim() || !formData.agentName?.trim() || !formData.projectName?.trim() || !formData.scopeOfWork?.trim()) {
-                            return toast.error("Please fill in Project Title, Location, Agent Name, Project Name, and Scope of Work.");
+                        if (step.id > currentStep) {
+                          for (let stepToValidate = currentStep; stepToValidate < step.id; stepToValidate += 1) {
+                            const validationError = validateStep(stepToValidate);
+                            if (validationError) return toast.error(validationError);
                           }
                         }
                         setCurrentStep(step.id);
@@ -597,7 +620,7 @@ export default function JobRequestWizard() {
                       <div className="grid md:grid-cols-2 gap-6">
                         <div className="space-y-3">
                           <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
-                            Site Installation
+                            Site Installation *
                             <TooltipProvider>
                               <Tooltip>
                                 <TooltipTrigger>
@@ -620,7 +643,7 @@ export default function JobRequestWizard() {
                         </div>
                         <div className="space-y-3">
                           <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
-                            Item Modification
+                            Item Modification *
                             <TooltipProvider>
                               <Tooltip>
                                 <TooltipTrigger>
@@ -662,7 +685,7 @@ export default function JobRequestWizard() {
                               </Tooltip>
                             </TooltipProvider>
                           </Label>
-                          <Input className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder="Enter project title" value={formData.projectTitle} onChange={e => setFormData({...formData, projectTitle: e.target.value})} />
+                          <Input required className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder="Enter project title" value={formData.projectTitle} onChange={e => setFormData({...formData, projectTitle: e.target.value})} />
                         </div>
                         <div className="space-y-1.5">
                           <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
@@ -681,6 +704,7 @@ export default function JobRequestWizard() {
                           <div className="flex gap-2">
                             <Input
                               className="h-11 rounded-xl font-bold text-[12px] flex-1 focus:ring-2 focus:ring-slate-900/10 transition-all"
+                              required
                               placeholder="Select location from map"
                               value={formData.location}
                               onChange={e => setFormData({...formData, location: e.target.value})}
@@ -710,7 +734,7 @@ export default function JobRequestWizard() {
                               </Tooltip>
                             </TooltipProvider>
                           </Label>
-                          <Input className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder={userDetails?.referenceid || "RP-CSR-XXXXXX"} value={formData.agentName} onChange={e => setFormData({...formData, agentName: e.target.value})} />
+                          <Input required className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder={userDetails?.referenceid || "RP-CSR-XXXXXX"} value={formData.agentName} onChange={e => setFormData({...formData, agentName: e.target.value})} />
                         </div>
                         )}
                       </div>
@@ -719,7 +743,7 @@ export default function JobRequestWizard() {
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between w-full">
                             <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
-                              Customer / Account
+                              Customer / Account *
                               <TooltipProvider>
                                 <Tooltip>
                                   <TooltipTrigger>
@@ -842,7 +866,7 @@ export default function JobRequestWizard() {
                         </div>
                         <div className="space-y-1.5">
                           <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
-                            Project / Site Name <span className="text-red-500 font-black">*</span>
+                            Project / Site Name * <span className="text-red-500 font-black">*</span>
                             <TooltipProvider>
                               <Tooltip>
                                 <TooltipTrigger>
@@ -854,14 +878,15 @@ export default function JobRequestWizard() {
                               </Tooltip>
                             </TooltipProvider>
                           </Label>
-                          <Input className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder="Solar Lights Installation - Building A" value={formData.projectName} onChange={e => setFormData({...formData, projectName: e.target.value})} />
+                          <Input required className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder="Solar Lights Installation - Building A" value={formData.projectName} onChange={e => setFormData({...formData, projectName: e.target.value})} />
                         </div>
                       </div>
 
                       <div className="grid md:grid-cols-3 gap-6">
                         <div className="space-y-1.5">
-                          <Label className="text-[10px] font-black uppercase text-slate-400">Contact Person</Label>
+                          <Label className="text-[10px] font-black uppercase text-slate-400">                          Contact Person *</Label>
                           <Input 
+                            required
                             className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all disabled:opacity-70 disabled:cursor-not-allowed" 
                             placeholder="John Doe, Jane Smith" 
                             value={formData.contactPerson} 
@@ -870,8 +895,9 @@ export default function JobRequestWizard() {
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <Label className="text-[10px] font-black uppercase text-slate-400">Email Address</Label>
+                          <Label className="text-[10px] font-black uppercase text-slate-400">                          Email Address *</Label>
                           <Input 
+                            required
                             className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all disabled:opacity-70 disabled:cursor-not-allowed" 
                             placeholder="email@example.com" 
                             value={formData.email} 
@@ -880,8 +906,9 @@ export default function JobRequestWizard() {
                           />
                         </div>
                         <div className="space-y-1.5">
-                          <Label className="text-[10px] font-black uppercase text-slate-400">Contact Number</Label>
+                          <Label className="text-[10px] font-black uppercase text-slate-400">                          Contact Number *</Label>
                           <Input 
+                            required
                             className="h-11 rounded-xl font-bold text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all disabled:opacity-70 disabled:cursor-not-allowed" 
                             placeholder="0917..., (02)..." 
                             value={formData.contactNumber} 
@@ -919,7 +946,24 @@ export default function JobRequestWizard() {
                           </div>
                         </div>
                       </div>
-                      <div className="space-y-1.5 w-full">
+                      <div className="grid md:grid-cols-[minmax(0,1fr)_3fr] gap-4 w-full">
+                        <div className="space-y-1.5">
+                          <Label className="text-[10px] font-black uppercase text-slate-400">Quantity *</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            step={1}
+                            inputMode="numeric"
+                            required
+                            className="h-11 rounded-xl text-[12px] w-full"
+                            placeholder="Enter quantity"
+                            value={formData.scopeQty}
+                            onChange={e => {
+                              if (/^\d*$/.test(e.target.value)) setFormData({...formData, scopeQty: e.target.value});
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-1.5 w-full">
                         <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
                           Scope of Work <span className="text-red-500 font-black">*</span>
                           <TooltipProvider>
@@ -933,7 +977,8 @@ export default function JobRequestWizard() {
                             </Tooltip>
                           </TooltipProvider>
                         </Label>
-                        <Textarea className="min-h-[160px] rounded-xl p-3 text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder="QTY, Item Name, Provide details or works to be accomplished..." value={formData.scopeOfWork} onChange={e => setFormData({...formData, scopeOfWork: e.target.value})} />
+                        <Textarea required className="min-h-[160px] rounded-xl p-3 text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" placeholder="Item Name, Provide details or works to be accomplished..." value={formData.scopeOfWork} onChange={e => setFormData({...formData, scopeOfWork: e.target.value})} />
+                        </div>
                       </div>
                     </div>
                   )}
@@ -943,7 +988,7 @@ export default function JobRequestWizard() {
                       <div className="grid md:grid-cols-2 gap-6">
                         <div className="space-y-3">
                           <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">
-                            Documents Need for Work Permit
+                            Documents Need for Work Permit *
                             <TooltipProvider>
                               <Tooltip>
                                 <TooltipTrigger>
@@ -969,10 +1014,11 @@ export default function JobRequestWizard() {
                             ))}
                           </div>
                           <div className="space-y-1.5 mt-3">
-                            <Label className="text-[10px] font-black uppercase text-slate-400">Others: Input Details</Label>
+                            <Label className="text-[10px] font-black uppercase text-slate-400">Other Documents *</Label>
                             <Textarea 
+                              required
                               className="min-h-[80px] rounded-xl text-[11px] font-bold uppercase w-full focus:ring-2 focus:ring-slate-900/10 transition-all" 
-                              placeholder="List other documents here..."
+                              placeholder="List other documents, or enter None..."
                               value={formData.otherDocuments} 
                               onChange={e => setFormData({...formData, otherDocuments: e.target.value})} 
                             />
@@ -980,7 +1026,7 @@ export default function JobRequestWizard() {
                         </div>
                         <div className="space-y-4">
                           <div className="space-y-2">
-                            <Label className="text-[10px] font-black uppercase text-slate-400">Working Days</Label>
+                            <Label className="text-[10px] font-black uppercase text-slate-400">Working Days *</Label>
                             <div className="flex flex-wrap gap-2 w-full">
                               {["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].map(day => (
                                 <button key={day} onClick={() => toggleItem(workingDays, setWorkingDays, day)} className={`size-9 rounded-lg text-[10px] font-black border-2 transition-all ${workingDays.includes(day) ? 'bg-slate-900 border-slate-900 text-white shadow-md' : 'bg-white border-slate-100 text-slate-400 hover:border-slate-200'}`}>
@@ -990,12 +1036,13 @@ export default function JobRequestWizard() {
                             </div>
                           </div>
                           <div className="space-y-2">
-                            <Label className="text-[10px] font-black uppercase text-slate-400">Time Range</Label>
+                            <Label className="text-[10px] font-black uppercase text-slate-400">Time Range *</Label>
                             <div className="grid grid-cols-2 gap-3">
                               <div className="space-y-1">
                                 <Label className="text-[9px] font-bold uppercase text-slate-500">From</Label>
                                 <Input 
                                   type="datetime-local" 
+                                  required
                                   className="h-11 rounded-xl text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" 
                                   value={formData.workingTimeFrom} 
                                   onChange={e => setFormData({...formData, workingTimeFrom: e.target.value})} 
@@ -1005,6 +1052,7 @@ export default function JobRequestWizard() {
                                 <Label className="text-[9px] font-bold uppercase text-slate-500">To</Label>
                                 <Input 
                                   type="datetime-local" 
+                                  required
                                   className="h-11 rounded-xl text-[12px] w-full focus:ring-2 focus:ring-slate-900/10 transition-all" 
                                   value={formData.workingTimeTo} 
                                   onChange={e => setFormData({...formData, workingTimeTo: e.target.value})} 
@@ -1027,12 +1075,11 @@ export default function JobRequestWizard() {
                   </div>
                   {currentStep < 3 ? (
                     <Button 
+                      type="button"
+                      data-job-request-next
                       onClick={() => {
-                        if (currentStep === 2) {
-                          if (!formData.projectTitle?.trim() || !formData.location?.trim() || !formData.agentName?.trim() || !formData.projectName?.trim() || !formData.scopeOfWork?.trim()) {
-                            return toast.error("Please fill in Project Title, Location, Agent Name, Project Name, and Scope of Work.");
-                          }
-                        }
+                        const validationError = validateStep(currentStep);
+                        if (validationError) return toast.error(validationError);
                         setCurrentStep(prev => prev + 1);
                       }} 
                       className="h-11 px-8 bg-slate-900 text-white font-black uppercase text-[10px] shadow-lg shadow-slate-200 hover:shadow-xl transition-all"
@@ -1040,7 +1087,7 @@ export default function JobRequestWizard() {
                       Next Step
                     </Button>
                   ) : (
-                    <Button onClick={handleSubmit} disabled={isSubmitting} className="h-11 px-8 bg-emerald-600 text-white font-black uppercase text-[10px] shadow-lg shadow-emerald-100 hover:shadow-xl transition-all">
+                    <Button type="button" data-job-request-submit onClick={handleSubmit} disabled={isSubmitting} className="h-11 px-8 bg-emerald-600 text-white font-black uppercase text-[10px] shadow-lg shadow-emerald-100 hover:shadow-xl transition-all">
                       {isSubmitting ? <Loader2 className="animate-spin" /> : <><Send size={14} className="mr-2" /> Submit Request</>}
                     </Button>
                   )}

@@ -8,13 +8,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Clear the session cookie
-    res.setHeader("Set-Cookie", serialize("session", "", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV !== "development",
-      sameSite: "strict",
-      maxAge: 0,
-      path: "/",
-    }));
+    const cookiesToClear = [
+      "session",
+      "gsessionid",
+      "SID",
+    ];
+
+    const setCookieHeaders = cookiesToClear.map(cookieName =>
+      serialize(cookieName, "", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV !== "development",
+        sameSite: "strict",
+        maxAge: 0,
+        path: "/",
+      })
+    );
+
+    res.setHeader("Set-Cookie", setCookieHeaders);
 
     return res.status(200).json({ message: "Logout successful" });
   } catch (error) {

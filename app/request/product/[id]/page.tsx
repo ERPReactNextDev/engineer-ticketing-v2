@@ -157,6 +157,11 @@ const formatPHP = (val: any) => {
   return new Intl.NumberFormat("en-PH", { style: "currency", currency: "PHP", maximumFractionDigits: 0 }).format(num);
 };
 
+const formatDateTime = (value: string) => {
+  const date = new Date(value);
+  return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })} ${date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true })}`;
+};
+
 function extractDimensions(packaging: string) {
   if (!packaging) return { l: "", w: "", h: "" };
   const match = packaging.match(/(\d+)\s*cm\s*x\s*(\d+)\s*cm\s*x\s*(\d+)\s*cm/i);
@@ -2692,7 +2697,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
 
                 {/* ── LOGISTICS ── */}
                 {requestData && (
-                  <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm p-4 md:p-6">
+                  <div className="lg:hidden bg-white rounded-[24px] border border-zinc-200/60 shadow-sm p-4 md:p-6">
                     <SectionHeader icon={MapPin} title="Logistics & Delivery" />
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5">
                       <InfoBlock label="Delivery Site" value={requestData.delivery_address} icon={MapPin} fullWidth />
@@ -2706,10 +2711,23 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
               </div>
 
               {/* ── RIGHT: DESKTOP SIDEBAR ── */}
-              <div className="hidden lg:flex flex-col gap-4">
-                <div className="sticky top-4 space-y-4">
+              <div className="hidden lg:flex flex-col gap-4 self-stretch">
+
+                  {requestData && (
+                    <div className="bg-white rounded-[24px] border border-zinc-200/60 shadow-sm p-4">
+                      <SectionHeader icon={MapPin} title="Logistics & Delivery" />
+                      <div className="grid grid-cols-1 gap-4 mt-5">
+                        <InfoBlock label="Delivery Site" value={requestData.delivery_address} icon={MapPin} />
+                        <InfoBlock label="Contact Person" value={requestData.contact_person} icon={User} />
+                        <InfoBlock label="Mobile Number" value={requestData.contact_number} icon={Phone} />
+                        <InfoBlock label="Payment Terms" value={requestData.payment_terms} icon={CreditCard} />
+                        <InfoBlock label="Warranty" value={requestData.warranty} icon={ShieldCheck} />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Actions / Summary card */}
+                  <div className="sticky top-40 z-30">
                   <div className={cn(
                     "p-5 rounded-[24px] shadow-xl text-white relative overflow-hidden",
                     isApproved ? "bg-emerald-700" : isRejected ? "bg-rose-700" : "bg-zinc-900"
@@ -2826,17 +2844,17 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                       </div>
                       <div className="flex items-center justify-between">
                         <p className="text-[8px] text-white/50 uppercase tracking-widest">Created</p>
-                        <p className="text-[9px] font-bold text-white/70">
+                        <p className="text-[9px] font-bold text-white/70 whitespace-nowrap">
                           {spfData?.date_created
-                            ? new Date(spfData.date_created).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+                            ? formatDateTime(spfData.date_created)
                             : "---"}
                         </p>
                       </div>
                       {spfData?.date_updated && (
                         <div className="flex items-center justify-between">
                           <p className="text-[8px] text-white/50 uppercase tracking-widest">Last Saved</p>
-                          <p className="text-[9px] font-bold text-white/70">
-                            {new Date(spfData.date_updated).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                          <p className="text-[9px] font-bold text-white/70 whitespace-nowrap">
+                            {formatDateTime(spfData.date_updated)}
                           </p>
                         </div>
                       )}
@@ -2850,6 +2868,7 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                         </p>
                       </div>
                     )}
+                  </div>
                   </div>
 
                   {/* Special instructions */}
@@ -2880,7 +2899,6 @@ Recommended SRP: ${formatPHP(calcResult.srp)}
                       />
                     </div>
                   )}
-                </div>
               </div>
 
             </div>

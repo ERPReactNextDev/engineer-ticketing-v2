@@ -14,7 +14,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // CASE 1: Single User
     if (userId) {
-      const user = await fetchUserById(userId);
+      let user = await fetchUserById(userId);
+      if (!user) {
+        const { data, error } = await getSupabaseClient()
+          .from("users")
+          .select("*")
+          .eq("ReferenceID", userId)
+          .maybeSingle();
+
+        if (error) {
+          console.error("Supabase ReferenceID Lookup Error:", error);
+          return res.status(500).json({ error: error.message });
+        }
+        user = data;
+      }
       if (!user) return res.status(404).json({ error: "User not found" });
       const { Password, ...userData } = user;
       return res.status(200).json(userData);

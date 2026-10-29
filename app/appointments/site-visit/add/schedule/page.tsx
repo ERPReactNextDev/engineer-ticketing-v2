@@ -29,7 +29,7 @@ import { collection, addDoc, onSnapshot, query, where, serverTimestamp, Timestam
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { sendNotificationToHierarchy, NotificationTemplates } from "@/lib/notification-service"
-import { getNextSiteVisitNumber, releaseReservedNumber } from "@/lib/site-visit-counter"
+import { getNextSiteVisitNumber } from "@/lib/site-visit-counter"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { PageHeader } from "@/components/page-header"
@@ -636,12 +636,20 @@ export default function SchedulePage() {
 
   const handleSubmitProtocol = async () => {
     if (isSubmitting) return;
+    const currentUserId = localStorage.getItem("userId");
+    const submittedBy = userDetails?.referenceid?.trim();
+    if (!currentUserId) {
+      toast.error("Could not identify your account. Please sign in again.");
+      return;
+    }
+    if (!submittedBy) {
+      toast.error("Your Supabase ReferenceID is missing. Please contact support.");
+      return;
+    }
+
     setIsSubmitting(true);
     const toastId = toast.loading("SYNCHRONIZING OPERATIONAL DATA...");
     
-    // FETCH SUBMITTING USER ID
-    const currentUserId = localStorage.getItem("userId");
-
     try {
       let fileUrl = "";
       if (attachedFile) {
@@ -673,11 +681,8 @@ export default function SchedulePage() {
         status: "PENDING",
         createdAt: serverTimestamp(), 
         department: "ENGINEERING",
-        submittedBy: currentUserId 
+        submittedBy
       });
-
-      // Release the number reservation after successful save
-      await releaseReservedNumber(siteVisitNo);
 
       // Reset context state and clear local storage after successful submission
       resetForm();
@@ -695,8 +700,12 @@ export default function SchedulePage() {
       }
 
       setTimeout(() => router.push("/appointments/site-visit"), 1500); 
-    } catch (error: any) {
-      toast.error("DEPLOYMENT FAILURE", { id: toastId });
+    } catch (error) {
+      console.error("SITE_VISIT_SUBMISSION_ERROR", error);
+      const message = error instanceof Error
+        ? error.message
+        : "Could not schedule the site visit. Please try again.";
+      toast.error(`DEPLOYMENT FAILURE: ${message}`, { id: toastId });
     } finally { setIsSubmitting(false); }
   };
 

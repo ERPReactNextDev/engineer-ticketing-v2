@@ -35,10 +35,12 @@ import {
 // FIREBASE
 import { db } from "@/lib/firebase"
 import { collection, onSnapshot, query, orderBy, where, doc, updateDoc, getDoc } from "firebase/firestore"
+import { listJobRequests } from "@/lib/job-request-supabase"
 
 // CUSTOM COMPONENTS
 import { PageHeader } from "@/components/page-header"
 import { JobCounterAdmin } from "@/components/job-counter-admin"
+import { needsJobRequestAttention } from "@/lib/job-request-notifications"
 
 /* ─────────────────────────────────────────────
    CONSTANTS
@@ -391,6 +393,7 @@ export default function JobRequestManagementPage() {
     const [requests, setRequests] = React.useState<any[]>([])
     const [subordinateIds, setSubordinateIds] = React.useState<string[]>([])
     const [isDataLoading, setIsDataLoading] = React.useState(true)
+    const [dataLoadError, setDataLoadError] = React.useState<string | null>(null)
     const [selectedStatus, setSelectedStatus] = React.useState<string | null>(null)
     const [searchQuery, setSearchQuery] = React.useState("")
 
@@ -525,60 +528,77 @@ React.useEffect(() => {
         userDept === "IT" || userDept === "ENGINEERING" || userDept === "PROCUREMENT" || ["SUPER ADMIN", "LEADER"].includes(userRole)
 
     const mapDoc = (d: any) => {
-        const data = d.data()
+        const data = d || {}
         return {
-            id: d.id.slice(-6).toUpperCase(),
-            fullId: d.id,
+            id: String(d.id || "").slice(-6).toUpperCase(),
+            fullId: d.id || "",
             ...data,
             status: (data.status || "JR FORM FORWARD TO ENGINEERING").toUpperCase(),
         }
     }
+
     const toMillis = (v: any) =>
         v?.toDate ? v.toDate().getTime() : v ? new Date(v).getTime() || 0 : 0
 
-    // Global access: unchanged
-    if (hasGlobalAccess) {
-        const unsub = onSnapshot(
-            query(collection(db, "job_requests"), orderBy("createdAt", "desc")),
-            (snap: any) => { setRequests(snap.docs.map(mapDoc)); setIsDataLoading(false) },
-            (err) => { console.error("Firestore Sync Error:", err); setIsDataLoading(false) }
-        )
-        return () => unsub()
+    const loadRequests = async () => {
+        try {
+            setDataLoadError(null)
+            const rows = await listJobRequests()
+            if (!rows.length) {
+                setRequests([])
+                setIsDataLoading(false)
+                return
+            }
+
+            if (hasGlobalAccess) {
+                setRequests(rows.map((row) => ({
+                    ...row,
+                    fullId: String(row.id ?? ""),
+                    status: (row.status || "JR FORM FORWARD TO ENGINEERING").toUpperCase(),
+                })))
+                setIsDataLoading(false)
+                return
+            }
+
+            const ids = Array.from(new Set([user.refId, user.id, ...subordinateIds].filter(Boolean).map(String)))
+            const visible = rows.filter((row: any) => {
+                const createdBy = String(row.createdBy || "")
+                const submittedBy = String(row.submittedBy || "")
+                return ids.includes(createdBy) || ids.includes(submittedBy)
+            })
+
+            const sorted = visible.sort((a: any, b: any) => toMillis(b.createdAt) - toMillis(a.createdAt))
+            setRequests(sorted.map(mapDoc))
+        } catch (error) {
+            const errorFields: { message?: unknown; code?: unknown; details?: unknown; hint?: unknown } =
+                error && typeof error === "object" ? error : {}
+            const errorMessage = typeof errorFields.message === "string"
+                ? errorFields.message
+                : error instanceof Error
+                    ? error.message
+                    : String(error) !== "[object Object]"
+                        ? String(error)
+                        : "An unexpected error occurred while loading job requests."
+            const errorCode = typeof errorFields.code === "string" ? errorFields.code : undefined
+            const errorDetails = typeof errorFields.details === "string" ? errorFields.details : undefined
+            const errorHint = typeof errorFields.hint === "string" ? errorFields.hint : undefined
+            const diagnostic = [
+                errorMessage,
+                errorCode && `Code: ${errorCode}`,
+                errorDetails,
+                errorHint
+            ]
+                .filter(Boolean)
+                .join(" — ")
+            console.error("Job request sync error:", { message: errorMessage, code: errorCode, details: errorDetails, hint: errorHint, raw: error })
+            setDataLoadError(diagnostic)
+            setRequests([])
+        } finally {
+            setIsDataLoading(false)
+        }
     }
 
-    // Everyone else: all identifiers that can appear in createdBy / submittedBy
-    const ids = Array.from(new Set(
-        [user.refId, user.id, ...subordinateIds].filter(Boolean).map(String)
-    ))
-    const chunks: string[][] = []
-    for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30))
-
-    const bucket = new Map<string, any>()
-    const sources: Record<string, Map<string, any>> = {}
-    const flush = () => {
-        bucket.clear()
-        Object.values(sources).forEach(m => m.forEach((v, k) => bucket.set(k, v)))
-        setRequests(
-            Array.from(bucket.values()).sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt))
-        )
-        setIsDataLoading(false)
-    }
-
-    const unsubs: Array<() => void> = []
-    chunks.forEach((chunk, ci) => {
-        ;(["createdBy", "submittedBy"] as const).forEach(field => {
-            const key = `${field}-${ci}`
-            sources[key] = new Map()
-            // no orderBy → no composite index needed; sorted client-side
-            const q = query(collection(db, "job_requests"), where(field, "in", chunk))
-            unsubs.push(onSnapshot(q, (snap: any) => {
-                sources[key] = new Map(snap.docs.map((d: any) => [d.id, mapDoc(d)]))
-                flush()
-            }, (err) => { console.error(`Sync error (${key}):`, err); setIsDataLoading(false) }))
-        })
-    })
-
-    return () => unsubs.forEach(u => u())
+    loadRequests()
 }, [user, isUserLoading, subordinateIds])
 
     const filteredRequests = React.useMemo(() => {
@@ -837,6 +857,16 @@ React.useEffect(() => {
                                         <SkeletonRow />
                                         <SkeletonRow />
                                     </>
+                                ) : dataLoadError ? (
+                                    <div role="alert" className="p-20 text-center">
+                                        <div className="size-20 bg-rose-50 rounded-[28px] flex items-center justify-center mx-auto mb-6">
+                                            <AlertCircle className="size-10 text-rose-500" />
+                                        </div>
+                                        <h3 className="text-[14px] font-black text-zinc-900 uppercase tracking-tight">Unable to Load Job Requests</h3>
+                                        <p className="text-[11px] font-bold text-rose-600 mt-2 max-w-lg mx-auto leading-relaxed">
+                                            {dataLoadError}
+                                        </p>
+                                    </div>
                                 ) : paginatedItems.length === 0 ? (
                                     <div className="p-20 text-center">
                                         <div className="size-20 bg-zinc-50 rounded-[28px] flex items-center justify-center mx-auto mb-6">
@@ -857,6 +887,9 @@ React.useEffect(() => {
                                 ) : (
                                     paginatedItems.map((r) => {
                                         const meta = getStatusMeta(r.status)
+                                        const hasUnreadPing = !!user.id &&
+                                            needsJobRequestAttention(r.status, user.dept, user.role) &&
+                                            r.viewedStatusByUser?.[user.id] !== r.status
                                         return (
                                             <div
                                                 key={r.fullId}
@@ -865,9 +898,19 @@ React.useEffect(() => {
                                             >
                                                 {/* JOB REQUEST NUMBER - Display sequential number if available */}
                                                 <div className="flex flex-col">
-                                                    <span className="text-[11px] font-black text-blue-600 tracking-tight uppercase">
-                                                        {r.jobRequestNo || `#${r.id}`}
-                                                    </span>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[11px] font-black text-blue-600 tracking-tight uppercase">
+                                                            {r.jobRequestNo || `#${r.id}`}
+                                                        </span>
+                                                        {hasUnreadPing && (
+                                                            <span
+                                                                aria-label="New Job Request notification"
+                                                                className="inline-flex size-4 items-center justify-center rounded-full bg-red-500 text-[9px] font-black leading-none text-white shadow-sm"
+                                                            >
+                                                                1
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                     {!r.jobRequestNo && (
                                                         <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest truncate max-w-[100px]">{r.fullId.substring(0, 15)}...</span>
                                                     )}

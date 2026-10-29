@@ -11,77 +11,12 @@ import {
   where,
   getDocs,
   limit,
-  deleteDoc,
-  Timestamp,
 } from "firebase/firestore";
 
 const COUNTER_DOC_ID = "site_visits";
 const STARTING_NUMBER = 36;
 const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 100;
-
-// Reserved numbers expire after 5 minutes (prevents stuck numbers if save fails)
-const RESERVATION_EXPIRY_MINUTES = 5;
-
-/**
- * Reserve a number temporarily to prevent collisions during high traffic
- */
-async function reserveNumber(number: string, isTest: boolean): Promise<boolean> {
-  try {
-    const reservationRef = doc(db, "counters", "reserved_numbers", "numbers", number);
-    const now = Timestamp.now();
-    
-    await setDoc(reservationRef, {
-      number,
-      isTest,
-      reservedAt: now,
-      expiresAt: Timestamp.fromMillis(now.toMillis() + RESERVATION_EXPIRY_MINUTES * 60 * 1000),
-    });
-    return true;
-  } catch (error) {
-    console.error("Failed to reserve number:", error);
-    return false;
-  }
-}
-
-/**
- * Release a reserved number after successful save
- */
-export async function releaseReservedNumber(number: string): Promise<void> {
-  try {
-    const reservationRef = doc(db, "counters", "reserved_numbers", "numbers", number);
-    await deleteDoc(reservationRef);
-  } catch (error) {
-    // Silent fail - reservation will expire automatically
-    console.warn("Failed to release reservation (will auto-expire):", error);
-  }
-}
-
-/**
- * Check if a number is currently reserved
- */
-async function isNumberReserved(number: string): Promise<boolean> {
-  try {
-    const reservationRef = doc(db, "counters", "reserved_numbers", "numbers", number);
-    const snap = await getDoc(reservationRef);
-    if (!snap.exists()) return false;
-    
-    const data = snap.data();
-    const now = Timestamp.now();
-    
-    // Check if reservation has expired
-    if (data.expiresAt && data.expiresAt.toMillis() < now.toMillis()) {
-      // Clean up expired reservation
-      await deleteDoc(reservationRef);
-      return false;
-    }
-    
-    return true;
-  } catch (error) {
-    console.error("Error checking reservation:", error);
-    return false;
-  }
-}
 
 /**
  * Generate the next sequential site visit number with high-concurrency protection
@@ -166,19 +101,11 @@ export async function getNextSiteVisitNumber(
 
       const formattedNumber = `${prefix}${String(nextNum).padStart(3, "0")}`;
 
-      // Reserve the number immediately to prevent other users from getting it
-      const reserved = await reserveNumber(formattedNumber, isTest);
-      if (!reserved) {
-        console.warn(`Failed to reserve ${formattedNumber}, retrying...`);
-        lastError = new Error("Reservation failed");
-        continue;
-      }
-
-      // Final verification that this exact number doesn't exist
+      // Counter transactions serialize number generation; this check handles
+      // numbers that may predate the counter.
       const exists = await isSiteVisitNumberExists(formattedNumber);
       if (exists) {
         console.warn(`Number ${formattedNumber} already exists in database, retrying...`);
-        await releaseReservedNumber(formattedNumber);
         lastError = new Error("Number already exists");
         
         // Small delay before retry to reduce contention

@@ -14,6 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SeenByDialog } from "@/components/seen-by-dialog";
+import {
+  getJobRequestChatMessages,
+  getJobRequestSupabaseClient,
+  parseJobRequestChatMessages,
+  saveJobRequestChatMessages,
+} from "@/lib/job-request-supabase";
 
 const EngiConnectLogo = () => (
   <div className="flex items-center justify-center size-9 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl shadow-lg rotate-3">
@@ -62,6 +68,16 @@ interface CollaborationHubProps {
   userDepartment?: string;
 }
 
+function isChatMessage(value: unknown): value is Message {
+  if (!value || typeof value !== "object") return false;
+  const message = value as Partial<Message>;
+  return typeof message.id === "string"
+    && typeof message.text === "string"
+    && typeof message.senderId === "string"
+    && typeof message.senderName === "string"
+    && typeof message.time === "string";
+}
+
 export function CollaborationHub({
   requestId,
   spfNumber,
@@ -75,6 +91,7 @@ export function CollaborationHub({
   title = "dsiconnect",
   userDepartment
 }: CollaborationHubProps) {
+  const isSupabaseJobRequest = collectionName === "job_requests";
   // Always use spfNumber as document ID for chat to ensure consistency across all systems
   const effectiveDocId = spfNumber;
   
@@ -102,7 +119,12 @@ export function CollaborationHub({
   // New States for Features
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [userNamesMap, setUserNamesMap] = useState<Record<string, { firstName: string; lastName: string; userName: string; profilePicture?: string; department?: string }>>({});
-  const [localMessages, setLocalMessages] = useState<Message[]>(messages);
+  const [localMessages, setLocalMessages] = useState<Message[]>(() => (
+    isSupabaseJobRequest
+      ? parseJobRequestChatMessages(messages).filter(isChatMessage)
+      : messages
+  ));
+  const [isRealtimeConnected, setIsRealtimeConnected] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const unreadRef = useRef<HTMLDivElement>(null);
@@ -123,6 +145,7 @@ export function CollaborationHub({
 
   // FEATURE: TYPING INDICATORS (WRITE)
   useEffect(() => {
+    if (isSupabaseJobRequest) return;
     const typingRef = doc(dbCollab, "typing_indicators", `${effectiveDocId}_${currentUserId}`);
     if (chatMessage.length > 0) {
       setDoc(typingRef, { userName, updatedAt: serverTimestamp() });
@@ -135,10 +158,87 @@ export function CollaborationHub({
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       deleteDoc(typingRef);
     };
-  }, [chatMessage, effectiveDocId, currentUserId, userName]);
+  }, [chatMessage, effectiveDocId, currentUserId, userName, isSupabaseJobRequest]);
 
   // FEATURE: REAL-TIME MESSAGE LISTENING
   useEffect(() => {
+    if (isSupabaseJobRequest) {
+      let active = true;
+      let fallbackTimer: ReturnType<typeof setInterval> | undefined;
+
+      const loadMessages = async () => {
+        try {
+          const storedMessages = await getJobRequestChatMessages(effectiveDocId);
+          if (active) setLocalMessages(storedMessages.filter(isChatMessage));
+        } catch (error) {
+          console.error("Error loading job request messages from Supabase:", error);
+          if (active) toast.error("Unable to load job request messages.");
+        }
+      };
+
+      const startFallbackPolling = () => {
+        if (fallbackTimer) return;
+        fallbackTimer = setInterval(() => void loadMessages(), 3000);
+      };
+
+      const supabase = getJobRequestSupabaseClient();
+      if (!supabase) {
+        console.error("Supabase job request chat is not configured.");
+        startFallbackPolling();
+        void loadMessages();
+        return () => {
+          active = false;
+          if (fallbackTimer) clearInterval(fallbackTimer);
+        };
+      }
+
+      void loadMessages();
+      const channel = supabase
+        .channel(`job-request-chat-${effectiveDocId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "job_requests",
+            filter: `id=eq.${effectiveDocId}`,
+          },
+          (payload) => {
+            try {
+              const updated = (payload.new as { messages?: unknown }).messages;
+              setLocalMessages(parseJobRequestChatMessages(updated).filter(isChatMessage));
+            } catch (error) {
+              console.error("Error reading updated Supabase job request messages:", error);
+              toast.error("Unable to read updated job request messages.");
+            }
+          }
+        )
+        .subscribe((subscriptionStatus, error) => {
+          if (!active) return;
+          if (subscriptionStatus === "SUBSCRIBED") {
+            setIsRealtimeConnected(true);
+            if (fallbackTimer) {
+              clearInterval(fallbackTimer);
+              fallbackTimer = undefined;
+            }
+            return;
+          }
+
+          setIsRealtimeConnected(false);
+          startFallbackPolling();
+          if (subscriptionStatus === "CHANNEL_ERROR" || subscriptionStatus === "TIMED_OUT") {
+            console.error("Supabase job request chat subscription failed:", error ?? subscriptionStatus);
+          }
+        });
+
+      return () => {
+        active = false;
+        setIsRealtimeConnected(false);
+        if (fallbackTimer) clearInterval(fallbackTimer);
+        void supabase.removeChannel(channel);
+      };
+    }
+
     const docRef = doc(dbCollab, collectionName, effectiveDocId);
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -154,20 +254,37 @@ export function CollaborationHub({
     });
 
     return () => unsubscribe();
-  }, [effectiveDocId, collectionName]);
+  }, [effectiveDocId, collectionName, isSupabaseJobRequest]);
 
   // Update localMessages when prop messages change (for initial load)
   useEffect(() => {
+    if (isSupabaseJobRequest) return;
     if (messages.length > 0 && localMessages.length === 0) {
       setLocalMessages(messages);
     }
-  }, [messages]);
+  }, [messages, isSupabaseJobRequest, localMessages.length]);
 
   // FEATURE: SYSTEM MESSAGES (STATUS CHANGE)
   useEffect(() => {
     if (prevStatus.current !== status && status !== "PENDING" && status !== "JR FORM FORWARD TO ENGINEERING") {
       const injectSystemMessage = async () => {
         try {
+          if (isSupabaseJobRequest) {
+            await saveJobRequestChatMessages(effectiveDocId, [
+              ...localMessages,
+              {
+                id: `sys-${Date.now()}`,
+                text: `PROJECT STATUS UPDATED TO: ${status}`,
+                senderId: "system",
+                senderName: "System",
+                role: "system",
+                time: new Date().toISOString(),
+                isSystem: true,
+                seenBy: [currentUserId],
+              },
+            ]);
+            return;
+          }
           const docRef = doc(dbCollab, collectionName, effectiveDocId);
           await updateDoc(docRef, {
             messages: arrayUnion({
@@ -186,7 +303,7 @@ export function CollaborationHub({
       injectSystemMessage();
     }
     prevStatus.current = status;
-  }, [status, effectiveDocId, collectionName, currentUserId]);
+  }, [status, effectiveDocId, collectionName, currentUserId, isSupabaseJobRequest, localMessages]);
 
   // FEATURE: MARK MESSAGES AS SEEN
   useEffect(() => {
@@ -208,8 +325,12 @@ export function CollaborationHub({
               }
               return msg;
             });
-            const docRef = doc(dbCollab, collectionName, effectiveDocId);
-            await updateDoc(docRef, { messages: updatedMessages });
+            if (isSupabaseJobRequest) {
+              await saveJobRequestChatMessages(effectiveDocId, updatedMessages);
+            } else {
+              const docRef = doc(dbCollab, collectionName, effectiveDocId);
+              await updateDoc(docRef, { messages: updatedMessages });
+            }
           } catch (e) {
             console.error("Failed to update seen status", e);
           }
@@ -217,7 +338,7 @@ export function CollaborationHub({
       };
       markAsSeen();
     }
-  }, [isOpen, localMessages, currentUserId, effectiveDocId, collectionName, userDepartment]);
+  }, [isOpen, localMessages, currentUserId, effectiveDocId, collectionName, userDepartment, isSupabaseJobRequest]);
 
   // FEATURE: FETCH USER NAMES FOR SEEN BY - Only fetch missing users, use memoization
   useEffect(() => {
@@ -365,8 +486,7 @@ export function CollaborationHub({
     setReplyingTo(null);
 
     try {
-      const docRef = doc(dbCollab, collectionName, effectiveDocId); 
-      const newMessage: any = {
+      const newMessage: Message = {
         id: Math.random().toString(36).substring(2, 11),
         text: content,
         senderId: currentUserId,
@@ -391,28 +511,43 @@ export function CollaborationHub({
         newMessage.privateRecipientName = recipientName;
       }
 
-      try {
-        await updateDoc(docRef, {
-          messages: arrayUnion(newMessage),
-          updatedAt: serverTimestamp()
-        });
-      } catch (docError: any) {
-        // If document doesn't exist, create it
-        if (docError.code === 'not-found') {
-          await setDoc(docRef, {
-            messages: [newMessage],
-            createdAt: serverTimestamp(),
+      if (isSupabaseJobRequest) {
+        const updatedMessages = [...localMessages, newMessage];
+        setLocalMessages(updatedMessages);
+        try {
+          await saveJobRequestChatMessages(effectiveDocId, updatedMessages);
+        } catch (error) {
+          setLocalMessages((current) => current.filter((message) => message.id !== newMessage.id));
+          throw error;
+        }
+      } else {
+        const docRef = doc(dbCollab, collectionName, effectiveDocId);
+        try {
+          await updateDoc(docRef, {
+            messages: arrayUnion(newMessage),
             updatedAt: serverTimestamp()
           });
-        } else {
-          throw docError;
+        } catch (docError: unknown) {
+          // If document doesn't exist, create it
+          const code = typeof docError === "object" && docError !== null && "code" in docError
+            ? docError.code
+            : undefined;
+          if (code === "not-found") {
+            await setDoc(docRef, {
+              messages: [newMessage],
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+          } else {
+            throw docError;
+          }
         }
       }
       sentSound.current?.play().catch(() => {});
       setLastSeenTime(Date.now());
       setTimeout(() => scrollToBottom("auto"), 100);
     } catch (e) {
-      console.error("Firebase send error:", e);
+      console.error("Chat send error:", e);
       toast.error("Message failed to send.");
       setChatMessage(content);
     } finally {
@@ -422,7 +557,6 @@ export function CollaborationHub({
 
   const toggleReaction = async (msgId: string, emoji: string) => {
     try {
-      const docRef = doc(dbCollab, collectionName, effectiveDocId);
       const updatedMessages = localMessages.map(m => {
         if (m.id === msgId) {
           const reactions = { ...(m.reactions || {}) };
@@ -434,7 +568,13 @@ export function CollaborationHub({
         }
         return m;
       });
-      await updateDoc(docRef, { messages: updatedMessages });
+      if (isSupabaseJobRequest) {
+        await saveJobRequestChatMessages(effectiveDocId, updatedMessages);
+      } else {
+        const docRef = doc(dbCollab, collectionName, effectiveDocId);
+        await updateDoc(docRef, { messages: updatedMessages });
+      }
+      setLocalMessages(updatedMessages);
       setActiveMessageId(null);
     } catch (e) {
       toast.error("Reaction failed");
@@ -443,11 +583,16 @@ export function CollaborationHub({
 
   const toggleResolve = async (msgId: string) => {
     try {
-      const docRef = doc(dbCollab, collectionName, effectiveDocId);
       const updatedMessages = localMessages.map(m =>
         m.id === msgId ? { ...m, isResolved: !m.isResolved } : m
       );
-      await updateDoc(docRef, { messages: updatedMessages });
+      if (isSupabaseJobRequest) {
+        await saveJobRequestChatMessages(effectiveDocId, updatedMessages);
+      } else {
+        const docRef = doc(dbCollab, collectionName, effectiveDocId);
+        await updateDoc(docRef, { messages: updatedMessages });
+      }
+      setLocalMessages(updatedMessages);
       toast.success("Status updated");
       setActiveMessageId(null);
     } catch (e) {
@@ -488,8 +633,15 @@ export function CollaborationHub({
                   <div>
                     <h3 className="text-sm font-bold tracking-tight text-white uppercase">{title}</h3>
                     <div className="flex items-center gap-1.5 mt-0.5">
-                      <div className="size-1.5 bg-green-400 rounded-full animate-pulse" />
-                      <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Online</p>
+                      <div className={cn(
+                        "size-1.5 rounded-full",
+                        !isSupabaseJobRequest || isRealtimeConnected
+                          ? "bg-green-400 animate-pulse"
+                          : "bg-amber-400"
+                      )} />
+                      <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">
+                        {isSupabaseJobRequest ? (isRealtimeConnected ? "Supabase Live" : "Checking Messages") : "Online"}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -612,7 +764,7 @@ export function CollaborationHub({
                               className="mb-2 p-2 bg-black/10 rounded-lg text-[10px] opacity-90 border-l-2 border-white/50 cursor-pointer hover:bg-black/20 transition-all"
                             >
                               <p className="font-bold truncate text-inherit opacity-70">{msg.replyTo.senderName}</p>
-                              <p className="truncate line-clamp-1 italic text-inherit">"{msg.replyTo.text}"</p>
+                              <p className="truncate line-clamp-1 italic text-inherit">&quot;{msg.replyTo.text}&quot;</p>
                             </div>
                           )}
                           
@@ -686,7 +838,7 @@ export function CollaborationHub({
                   
                   <div className="mb-3 p-3 bg-slate-50 rounded-xl border-l-4 border-slate-300">
                     <p className="text-xs font-medium text-slate-700">{replyingTo.senderName}</p>
-                    <p className="text-xs text-slate-600 italic line-clamp-2">"{replyingTo.text}"</p>
+                    <p className="text-xs text-slate-600 italic line-clamp-2">&quot;{replyingTo.text}&quot;</p>
                   </div>
 
                   <div className="space-y-2">
@@ -730,7 +882,7 @@ export function CollaborationHub({
                     <CornerDownRight size={14} className="text-blue-500 shrink-0" />
                     <div className="truncate">
                       <span className="font-bold text-blue-600">Reply to {replyingTo.senderName}</span>
-                      <p className="truncate text-slate-500 italic">"{replyingTo.text}"</p>
+                      <p className="truncate text-slate-500 italic">&quot;{replyingTo.text}&quot;</p>
                     </div>
                   </div>
                   <button onClick={() => setReplyingTo(null)} className="text-slate-400 hover:text-red-500 p-1"><X size={16} /></button>
@@ -786,7 +938,3 @@ export function CollaborationHub({
     </div>
   );
 }
-
-
-
-

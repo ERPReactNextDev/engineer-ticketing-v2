@@ -5,7 +5,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { ShieldCheck, Loader2, XCircle } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
-import { conxStorage } from "@/utils/storage-helper";
+import { conxStorage, clearAllCookies } from "@/utils/storage-helper";
 
 // Helper to make API calls
 const fetchFromAPI = async (endpoint: string, options?: RequestInit) => {
@@ -69,7 +69,7 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
         const userIdFromStorage = conxStorage.getItem("userId");
         const userDept = conxStorage.getItem("department")?.toUpperCase() || "";
         const userRole = conxStorage.getItem("engiconnect_role")?.toUpperCase() || conxStorage.getItem("userRole")?.toUpperCase() || "";
-        const delegatedUserId = searchParams ? searchParams.get("userId") : null;
+        const delegatedUserId = searchParams ? searchParams.get("userId") || searchParams.get("id") : null;
 
         const finalUserId = delegatedUserId || userIdFromStorage;
 
@@ -97,6 +97,7 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
           // If forceLogout is true (Resigned/Terminated), clear session and redirect
           if (data.forceLogout) {
             await fetch(`${API_BASE}/api/logout`, { method: "POST" });
+            clearAllCookies();
             conxStorage.clear();
             router.push("/login");
             return;
@@ -124,6 +125,7 @@ function ProtectedContent({ children }: { children: React.ReactNode }) {
             // If forceLogout is true (Resigned/Terminated), clear session and redirect
             if (forceLogout) {
               await fetch(`${API_BASE}/api/logout`, { method: "POST" });
+              clearAllCookies();
               conxStorage.clear();
               router.push("/login");
               return;

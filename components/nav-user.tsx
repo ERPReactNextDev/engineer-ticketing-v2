@@ -18,7 +18,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Progress } from "@/components/ui/progress"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
-import { conxStorage } from "@/utils/storage-helper"
+import { conxStorage, clearAllCookies } from "@/utils/storage-helper"
 
 interface NavUserProps {
   user: {
@@ -38,6 +38,9 @@ interface NavUserProps {
 ───────────────────────────────────────────── */
 function clearSession(userId?: string) {
   sessionStorage.clear()
+
+  // Clear all cookies from the browser
+  clearAllCookies()
 
   // Identity - use conxStorage to handle iframe isolation
   conxStorage.removeItem("userId")
@@ -79,6 +82,12 @@ export function NavUser({ user }: NavUserProps) {
     startTransition("Signing out...", "logging-out")
     await new Promise(r => setTimeout(r, 900))
     clearSession(user.id)
+    // Call logout API to clear server-side cookies
+    try {
+      await fetch("/api/logout", { method: "POST" })
+    } catch (err) {
+      console.error("Logout API error:", err)
+    }
     router.replace("/login")
   }
 

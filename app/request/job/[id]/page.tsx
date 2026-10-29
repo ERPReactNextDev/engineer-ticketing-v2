@@ -9,14 +9,15 @@ import {
   ArrowRight, Info, AlertCircle, Share2, Calendar, Activity,
   Download, Building2, ClipboardList, Timer as TimerIcon,
   Search, Eye, Trash2, Edit3, Send, Plus, Fingerprint,
-  Radio, Cpu, ShieldAlert, Wrench, LayoutGrid, Ruler, Handshake, Construction,
+  Radio, Cpu, ShieldAlert, Wrench, LayoutGrid, Ruler, Construction,
   UploadCloud, Minus
 } from "lucide-react";
 
-
 // DATABASE
 import { db } from "@/lib/firebase";
-import { doc, onSnapshot, updateDoc, setDoc, writeBatch, serverTimestamp, deleteField } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
+import { getJobRequestById, markRequestViewed, updateJobRequest } from "@/lib/job-request-supabase";
+import { getBoqDraft, saveBoqDraft } from "@/lib/boq-draft-supabase";
 
 // UI COMPONENTS
 import { toast } from "sonner";
@@ -50,9 +51,6 @@ import {
   type BoqSummary,
   type ProcurementData,
 } from "../../../../components/job-fill-up-form-dialog";
-
-/** Collection where the Fill Up Form is saved (doc id = job request id) */
-const FILL_UPS_COLLECTION = "job_fill_ups";
 
 /** Approval flow order: Member -> Leader -> Manager -> Procurement -> Procurement Approved */
 const STATUS_ORDER = [
@@ -93,6 +91,7 @@ export default function JobDetailsPage() {
   const [draftToLoad, setDraftToLoad] = useState<FillUpDraft | null>(null);
 
   const status = data?.status?.toUpperCase() || "JR FORM FORWARD TO ENGINEERING";
+  const requestReference = data?.jobRequestNo || params.id.slice(-8).toUpperCase();
   const isAdmin = userContext.role === "admin" || userContext.role === "it";
   const isEngineering = userContext.department === "engineering";
   const isProcurement = userContext.department === "procurement";
@@ -135,41 +134,76 @@ export default function JobDetailsPage() {
         }));
     }
 
-    const docRef = doc(db, "job_requests", params.id);
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const jobData = docSnap.data();
-        setData(jobData);
-        // adminNotes = legacy single notes field, used as fallback for member notes
-        setMemberNotes(jobData.memberNotes || jobData.adminNotes || "");
-        setLeaderNotes(jobData.leaderNotes || "");
-        setManagerNotes(jobData.managerNotes || "");
-        setProcurementNotes(jobData.procurementNotes || "");
-        if (jobData.attachments?.[0] && !selectedImage) {
-          setSelectedImage(jobData.attachments[0]);
-        }
-      }
-      setLoading(false);
-    });
+    let isMounted = true;
 
-    return () => unsubscribe();
+    const loadJobRequest = async () => {
+      try {
+        const jobData = await getJobRequestById(params.id);
+        if (!isMounted) return;
+
+        if (jobData) {
+          setData(jobData);
+          setMemberNotes(jobData.memberNotes || jobData.adminNotes || "");
+          setLeaderNotes(jobData.leaderNotes || "");
+          setManagerNotes(jobData.managerNotes || "");
+          setProcurementNotes(jobData.procurementNotes || "");
+          if (jobData.attachments?.[0] && !selectedImage) {
+            setSelectedImage(jobData.attachments[0]);
+          }
+        }
+      } catch (error) {
+        console.error("JOB_REQUEST_LOAD_ERROR", error);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    loadJobRequest();
+    return () => {
+      isMounted = false;
+    };
   }, [params.id]);
 
-  // Listen to the saved Fill Up Form draft (job_fill_ups/{requestId})
   useEffect(() => {
-    const draftRef = doc(db, FILL_UPS_COLLECTION, params.id);
-    const unsubscribe = onSnapshot(
-      draftRef,
-      (snap) => {
-        setFillUpDraft(snap.exists() ? (snap.data() as FillUpDraft) : null);
-      },
-      (err) => {
-        console.error("FILL_UP_DRAFT_LISTEN_ERROR", err);
-        setFillUpDraft(null);
-      }
-    );
+    if (!userContext.id || !data || data.viewedStatusByUser?.[userContext.id] === status) return;
 
-    return () => unsubscribe();
+    markRequestViewed(params.id, userContext.id, status)
+      .catch((err) => {
+        console.error("Failed to mark Job Request as viewed:", err);
+        toast.error("Unable to update the Job Request notification.");
+      });
+  }, [data, params.id, status, userContext.id]);
+
+  // Load the Supabase BOQ draft, falling back to the legacy Firestore record.
+  useEffect(() => {
+    let cancelled = false;
+    const loadDraft = async () => {
+      try {
+        const draft = await getBoqDraft(params.id);
+        if (draft || cancelled) {
+          if (!cancelled) setFillUpDraft(draft as FillUpDraft | null);
+          return;
+        }
+
+        const legacySnapshot = await getDoc(doc(db, "job_fill_ups", params.id));
+        if (!cancelled) {
+          setFillUpDraft(
+            legacySnapshot.exists() ? (legacySnapshot.data() as FillUpDraft) : null
+          );
+        }
+      } catch (err) {
+        console.error("BOQ_DRAFT_LOAD_ERROR", err);
+        if (!cancelled) {
+          toast.error("Unable to load the BOQ draft.");
+          setFillUpDraft(null);
+        }
+      }
+    };
+
+    void loadDraft();
+    return () => {
+      cancelled = true;
+    };
   }, [params.id]);
 
   // Resolve Agent ReferenceID -> First + Last name (users table)
@@ -287,37 +321,17 @@ export default function JobDetailsPage() {
     summary: BoqSummary,
     procurement?: ProcurementData
   ) => {
-    // JSON round-trip strips `undefined` values, which Firestore does not accept
-    const payload = JSON.parse(
-      JSON.stringify({
-        values,
-        boqSections,
-        summary,
-        ...(procurement ? { procurement: { ...procurement, savedBy: userContext.name } } : {}),
-      })
-    );
-
-    const draftRef = doc(db, FILL_UPS_COLLECTION, params.id);
-
-    if (fillUpDraft) {
-      // Update the existing draft (keeps createdBy / createdAt)
-      await updateDoc(draftRef, {
-        ...payload,
-        updatedBy: userContext.name,
-        updatedAt: serverTimestamp(),
-      });
-      return;
-    }
-
-    await setDoc(draftRef, {
-      ...payload,
-      requestId: params.id,
-      status: "draft",
-      createdBy: userContext.id,
-      createdByName: userContext.name,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+    const savedDraft = await saveBoqDraft(params.id, {
+      values,
+      boqSections,
+      summary,
+      ...(procurement ? { procurement: { ...procurement, savedBy: userContext.name } } : {}),
+      status: fillUpDraft?.status ?? "draft",
+      createdBy: fillUpDraft?.createdBy ?? userContext.id,
+      createdByName: fillUpDraft?.createdByName ?? userContext.name,
+      updatedBy: userContext.name,
     });
+    setFillUpDraft(savedDraft as FillUpDraft);
   };
 
   /**
@@ -326,46 +340,35 @@ export default function JobDetailsPage() {
    * so Engineering / Sales never get it.
    */
   const handleSaveProcurement = async (procurement: ProcurementData) => {
-    const clean = JSON.parse(JSON.stringify({ ...procurement, savedBy: userContext.name }));
-    // Legacy case: no job_fill_ups doc yet, only the copy inside the job request
-    const base =
-      !fillUpDraft && viewableFillUp
-        ? JSON.parse(
-            JSON.stringify({
-              values: viewableFillUp.values,
-              boqSections: viewableFillUp.boqSections,
-              summary: viewableFillUp.summary,
-              requestId: params.id,
-              status: "completed",
-            })
-          )
-        : {};
-
-    await setDoc(
-      doc(db, FILL_UPS_COLLECTION, params.id),
-      {
-        ...base,
-        procurement: { ...clean, savedAt: serverTimestamp() },
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true }
-    );
+    const savedDraft = await saveBoqDraft(params.id, {
+      ...(viewableFillUp
+        ? {
+            values: viewableFillUp.values,
+            boqSections: viewableFillUp.boqSections,
+            summary: viewableFillUp.summary,
+          }
+        : {}),
+      procurement: { ...procurement, savedBy: userContext.name, savedAt: new Date().toISOString() },
+      status: fillUpDraft?.status ?? (viewableFillUp ? "completed" : "draft"),
+      createdBy: fillUpDraft?.createdBy ?? userContext.id,
+      createdByName: fillUpDraft?.createdByName ?? userContext.name,
+      updatedBy: userContext.name,
+    });
+    setFillUpDraft(savedDraft as FillUpDraft);
   };
 
   const handleUpdateStatus = async (newStatus: string) => {
     setIsUpdating(true);
     try {
-      const docRef = doc(db, "job_requests", params.id);
-      const updateData: any = {
+      const now = new Date().toISOString();
+      const updateData: Record<string, unknown> = {
         status: newStatus,
         // Only save the notes this user is allowed to edit, so other roles' notes are never overwritten
         ...(canEditMemberNotes ? { memberNotes } : {}),
         ...(canEditLeaderNotes ? { leaderNotes } : {}),
         ...(canEditManagerNotes ? { managerNotes } : {}),
         ...(canEditProcurementNotes ? { procurementNotes } : {}),
-        updatedAt: serverTimestamp(),
-        [`${newStatus.toLowerCase()}At`]: serverTimestamp(),
-        [`${newStatus.toLowerCase()}By`]: userContext.name
+        updatedAt: now,
       };
 
       const isForwardToProcurement = newStatus === "JR Form Forward to Procurement";
@@ -375,7 +378,7 @@ export default function JobDetailsPage() {
       // Save the approval of the stage being COMPLETED by the person who clicked
       // (Member -> Leader button, Leader -> Manager button, Manager -> Procurement button)
       const saveApproval = async (role: "Member" | "Leader" | "Manager") => {
-        updateData[`engineering${role}ApprovedAt`] = serverTimestamp();
+        updateData[`engineering${role}ApprovedAt`] = now;
         updateData[`approvedByEngineering${role}`] = userContext.referenceId;
         try {
           const res = await fetch(
@@ -392,9 +395,9 @@ export default function JobDetailsPage() {
 
       // NEW: remove approval fields of stages that haven't happened yet
       const clearApproval = (role: "Leader" | "Manager") => {
-        updateData[`engineering${role}ApprovedAt`] = deleteField();
-        updateData[`approvedByEngineering${role}`] = deleteField();
-        updateData[`approvedByEngineering${role}Signature`] = deleteField();
+        updateData[`engineering${role}ApprovedAt`] = null;
+        updateData[`approvedByEngineering${role}`] = null;
+        updateData[`approvedByEngineering${role}Signature`] = null;
       };
 
       if (isForwardToEngineeringLeader && status === "JR FORM FORWARD TO ENGINEERING") {
@@ -408,12 +411,12 @@ export default function JobDetailsPage() {
       }
       if (isForwardToProcurement) {
         await saveApproval("Manager");
-        updateData.completedAt = serverTimestamp();
+        updateData.completedAt = now;
       }
 
       // Procurement approval
       if (newStatus === "JR FORM APPROVED BY PROCUREMENT") {
-        updateData.procurementApprovedAt = serverTimestamp();
+        updateData.procurementApprovedAt = now;
         updateData.approvedByProcurement = userContext.referenceId;
         updateData.approvedByProcurementName = userContext.name;
         // SAY (rounded total) is copied here so Sales can read it from the job request
@@ -477,18 +480,24 @@ if (fillUpDraft?.procurement) {
         }
       }
 
-      // One atomic write: the job request update + marking the draft as completed
-      const batch = writeBatch(db);
-      batch.update(docRef, updateData);
+      // Update the Job Request in Supabase, then record BOQ draft completion.
+      const updatedRequest = await updateJobRequest(params.id, updateData);
+      setData(updatedRequest);
       if (isForwardToProcurement && fillUpDraft) {
-        batch.update(doc(db, FILL_UPS_COLLECTION, params.id), {
+        const completedDraft = await saveBoqDraft(params.id, {
+          values: fillUpDraft.values,
+          boqSections: fillUpDraft.boqSections,
+          summary: fillUpDraft.summary,
+          ...(fillUpDraft.procurement ? { procurement: fillUpDraft.procurement } : {}),
           status: "completed",
-          completedAt: serverTimestamp(),
+          createdBy: fillUpDraft.createdBy ?? userContext.id,
+          createdByName: fillUpDraft.createdByName ?? userContext.name,
+          updatedBy: userContext.name,
+          completedAt: new Date().toISOString(),
           completedBy: userContext.name,
-          updatedAt: serverTimestamp(),
         });
+        setFillUpDraft(completedDraft as FillUpDraft);
       }
-      await batch.commit();
 
       toast.success(`Request marked as ${newStatus.toLowerCase()}`);
     } catch (err) {
@@ -655,7 +664,7 @@ if (fillUpDraft?.procurement) {
         <SidebarInset className="bg-[#F8FAFC] pb-24 md:pb-0 relative flex flex-col min-h-screen">
           
           <PageHeader 
-            title={`REF: ${params.id.slice(-8).toUpperCase()}`} 
+            title={requestReference}
             version="V3.2 STABLE" 
             showBackButton={true}
             trigger={<SidebarTrigger className="mr-2" />}
@@ -766,7 +775,7 @@ if (fillUpDraft?.procurement) {
                 <CompactStat label="CLIENT" value={data?.clientName || "GENERAL"} icon={Building2} />
                 <CompactStat label="PRIORITY" value={data?.priority} icon={ShieldAlert} color={data?.priority === 'HIGH' ? 'text-red-600' : 'text-blue-600'} />
                 <CompactStat className="hidden md:flex" label={hasAgent ? "AGENT" : "REQUESTOR"} value={hasAgent ? requestorValue : (data?.submittedByName || "USER")} icon={User} />
-                <CompactStat className="hidden md:flex" label="REF ID" value={params.id.slice(-8).toUpperCase()} icon={Fingerprint} />
+                <CompactStat className="hidden md:flex" label="REF ID" value={requestReference} icon={Fingerprint} />
             </section>
 
 
@@ -1002,7 +1011,7 @@ if (fillUpDraft?.procurement) {
                           <p className="text-[7px] font-bold text-blue-400 uppercase tracking-widest leading-none">Job Request Details</p>
                         </div>
                       </div>
-                      <Badge className="bg-blue-500/20 text-blue-400 text-[8px] font-black border-none px-2 py-0.5 rounded-full">REF: {params.id.slice(-8).toUpperCase()}</Badge>
+                      <Badge className="bg-blue-500/20 text-blue-400 text-[8px] font-black border-none px-2 py-0.5 rounded-full">REF: {requestReference}</Badge>
                     </div>
                     
                     <div className="flex-1 overflow-y-auto p-4 space-y-6 scrollbar-hide">
@@ -1029,7 +1038,7 @@ if (fillUpDraft?.procurement) {
                       <Separator className="bg-slate-50" />
 
                       {/* Section 2: Core Details */}
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
                         <ManifestItem label="Client Name" value={data?.clientName || "GENERAL"} icon={Building2} />
                         <ManifestItem label="Urgency" value={data?.priority} icon={ShieldAlert} color={data?.priority === 'HIGH' ? 'text-red-600' : 'text-blue-600'} />
                         <ManifestItem 
@@ -1041,6 +1050,8 @@ if (fillUpDraft?.procurement) {
                           } 
                           icon={Clock} 
                         />
+                        <ManifestItem label="Working Days" value={data?.workingDays?.join(", ") || "N/A"} icon={Calendar} />
+                        <ManifestItem label="Total Days" value={typeof data?.totalWorkingDays === "number" ? String(data.totalWorkingDays) : "N/A"} icon={Calendar} />
                       </div>
 
                       <Separator className="bg-slate-50" />
@@ -1069,17 +1080,13 @@ if (fillUpDraft?.procurement) {
                         </div>
                       </div>
 
-                      {(data?.mountingHeight || data?.otherAssistance) && (
-                        <div className="grid grid-cols-2 gap-4">
-                          {data?.mountingHeight && <ManifestItem label="Mounting Height" value={data?.mountingHeight} icon={Ruler} />}
-                          {data?.otherAssistance && <ManifestItem label="Other Assistance" value={data?.otherAssistance} icon={Handshake} />}
-                        </div>
-                      )}
+                      {data?.mountingHeight && <ManifestItem label="Mounting Height" value={data.mountingHeight} icon={Ruler} />}
 
                       <Separator className="bg-slate-50" />
 
                       {/* Section 4: Work Scope */}
-                      <div className="space-y-2">
+                      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_3fr]">
+                        {data?.scopeQty != null && <ManifestItem label="Scope Quantity" value={String(data.scopeQty)} icon={FileText} />}
                         <ManifestItem label="Detailed Scope of Work" value={data?.scopeOfWork} icon={FileText} isLongText />
                       </div>
 
@@ -1243,7 +1250,7 @@ if (fillUpDraft?.procurement) {
                         <span className="text-[8px] font-black text-blue-400 uppercase tracking-[0.2em]">Project Name</span>
                         <h2 className="text-lg font-black leading-tight uppercase">{data?.projectName}</h2>
                       </div>
-                      <Badge className="bg-blue-500 text-white border-none text-[8px] font-black">REF: {params.id.slice(-8).toUpperCase()}</Badge>
+                      <Badge className="bg-blue-500 text-white border-none text-[8px] font-black">REF: {requestReference}</Badge>
                     </div>
                     <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/10">
                       <div className="space-y-1">
@@ -1350,12 +1357,7 @@ if (fillUpDraft?.procurement) {
                             )) : <span className="text-[9px] text-slate-300 font-bold italic">None</span>}
                           </div>
                         </div>
-                        {(data?.mountingHeight || data?.otherAssistance) && (
-                          <div className="grid grid-cols-2 gap-4">
-                            {data?.mountingHeight && <ManifestItem label="Height" value={data?.mountingHeight} icon={Ruler} />}
-                            {data?.otherAssistance && <ManifestItem label="Assistance" value={data?.otherAssistance} icon={Handshake} />}
-                          </div>
-                        )}
+                        {data?.mountingHeight && <ManifestItem label="Height" value={data.mountingHeight} icon={Ruler} />}
                       </div>
                     </div>
 
@@ -1365,7 +1367,10 @@ if (fillUpDraft?.procurement) {
                         <ClipboardList size={10} className="text-slate-400" />
                         <span className="text-[8px] font-black uppercase text-slate-400 tracking-widest">Scope of Work</span>
                       </div>
-                      <ManifestItem label="Description" value={data?.scopeOfWork} icon={FileText} isLongText />
+                      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_3fr]">
+                        {data?.scopeQty != null && <ManifestItem label="Scope Quantity" value={String(data.scopeQty)} icon={FileText} />}
+                        <ManifestItem label="Description" value={data?.scopeOfWork} icon={FileText} isLongText />
+                      </div>
                     </div>
 
                     {/* Logistics */}
@@ -1728,6 +1733,7 @@ if (fillUpDraft?.procurement) {
             readOnly={isFillUpFormReadOnly}
             showProcurement={isProcurement || isAdmin}
             procurementEditable={canEditProcurementNotes}
+            allowBoqCustomPricing={!isEngineering}
             onSaveProcurement={handleSaveProcurement}
           />
           

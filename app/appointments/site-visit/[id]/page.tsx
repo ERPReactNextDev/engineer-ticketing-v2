@@ -44,7 +44,7 @@ export default function AppointmentDetailsPage() {
     const [loading, setLoading] = React.useState(true)
     const [data, setData] = React.useState<any>(null)
     const [submitterName, setSubmitterName] = React.useState("")
-    const [userContext, setUserContext] = React.useState({ role: "", id: "", name: "", profilePicture: "", dept: "", userRole: "" })
+    const [userContext, setUserContext] = React.useState({ role: "", id: "", refId: "", name: "", profilePicture: "", dept: "", userRole: "" })
     const [actionLoading, setActionLoading] = React.useState(false)
     const [confNotes, setConfNotes] = React.useState("")
     const [cancelReason, setCancelReason] = React.useState("")
@@ -191,6 +191,7 @@ export default function AppointmentDetailsPage() {
                 setUserContext({
                     role: user.Department?.toLowerCase() || "",
                     id: storedId,
+                    refId: user.ReferenceID || "",
                     name: user.Firstname + " " + user.Lastname,
                     profilePicture: user.ProfilePicture || "",
                     dept: user.Department?.toLowerCase() || "",
@@ -301,7 +302,7 @@ export default function AppointmentDetailsPage() {
 
     const isEngineering = userContext.role === "it" || userContext.role === "engineering"
     const isSales = userContext.role === "sales"
-    const isRequestor = userContext.id === data?.submittedBy
+    const isRequestor = userContext.id === data?.submittedBy || userContext.refId === data?.submittedBy
     const isStaff = isEngineering || userContext.role === "admin"
     
     // IT, Engineering Leader, Engineering Manager, and Super Admin can assign personnel
