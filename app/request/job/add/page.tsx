@@ -12,7 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Plus, Send, Loader2, Wrench, FileText, X, ShieldCheck, Clock, Camera, ClipboardCheck,
-  AlertCircle, CheckCircle2, ChevronRight, Calendar, Info, ChevronDown, Check, FlaskConical, MapPin
+  AlertCircle, CheckCircle2, ChevronRight, Calendar, Info, FlaskConical, MapPin
 } from "lucide-react";
 import {
   Tooltip,
@@ -30,19 +30,7 @@ import { getNextJobRequestNumber, releaseReservedNumber } from "@/lib/job-reques
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebounce } from "@/hooks/use-debounce";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
+import { CustomerAccountPicker, type CustomerAccount } from "@/components/customer-account-picker";
 import {
   Dialog,
   DialogContent,
@@ -130,14 +118,13 @@ export default function JobRequestWizard() {
 
   // CUSTOMER DATABASE STATES
   const [userDetails, setUserDetails] = useState<any>(null);
-  const [accounts, setAccounts] = useState<any[]>([]);
+  const [accounts, setAccounts] = useState<CustomerAccount[]>([]);
   const [totalAccounts, setTotalAccounts] = useState(0);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [loadingUser, setLoadingUser] = useState(true);
-  const [openCustomer, setOpenCustomer] = useState(false);
   const [isCustomerSelected, setIsCustomerSelected] = useState(false);
 
   // MAP STATES
@@ -774,95 +761,35 @@ export default function JobRequestWizard() {
                                   Clear
                                 </button>
                               )}
-                              <div className="flex items-center gap-1 px-2 py-0.5 bg-slate-100 rounded-full border border-slate-200">
-                                <span className="text-[7px] font-black uppercase text-slate-400 tracking-widest">Database:</span>
-                                {loadingAccounts ? (
-                                  <Loader2 className="size-2 animate-spin text-slate-400 ml-1" />
-                                ) : (
-                                  <span className="text-[8px] font-black text-slate-900 ml-1">{totalAccounts}</span>
-                                )}
-                              </div>
                             </div>
                           </div>
-                          <Popover open={openCustomer} onOpenChange={setOpenCustomer}>
-                            <PopoverTrigger asChild>
-                              <Button
-                                variant="outline"
-                                role="combobox"
-                                aria-expanded={openCustomer}
-                                className={cn(
-                                  "w-full justify-between h-11 rounded-xl font-bold text-[12px] bg-white border-slate-200 hover:bg-slate-50 transition-all",
-                                  !formData.projectName && "text-slate-400"
-                                )}
-                                disabled={loadingAccounts && accounts.length === 0}
-                              >
-                                <span className="truncate">
-                                  {loadingAccounts && accounts.length === 0 ? (
-                                    <span className="flex items-center gap-2">
-                                      <Loader2 className="size-4 animate-spin" />
-                                      Syncing Database...
-                                    </span>
-                                  ) : (
-                                    formData.projectName || "Select Customer..."
-                                  )}
-                                </span>
-                                {!loadingAccounts && <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />}
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-[300px] p-0" align="start">
-                              <Command shouldFilter={false}>
-                                <CommandInput 
-                                  placeholder="Search customer..." 
-                                  className="h-9 text-[12px]" 
-                                  value={searchQuery}
-                                  onValueChange={setSearchQuery}
-                                />
-                                <CommandList className="max-h-[300px] overflow-y-auto" onScroll={(e) => {
-                                  const target = e.currentTarget;
-                                  if (target.scrollHeight - target.scrollTop <= target.clientHeight + 1) {
-                                    loadMoreAccounts();
-                                  }
-                                }}>
-                                  <CommandEmpty className="py-3 text-[11px] text-center">
-                                    {loadingAccounts ? "Searching..." : "No customer found."}
-                                  </CommandEmpty>
-                                  <CommandGroup>
-                                    {memoizedAccounts.map((account) => (
-                                      <CommandItem
-                                        key={account.id}
-                                        value={account.company_name}
-                                        onSelect={() => {
-                                          setFormData(prev => ({
-                                            ...prev,
-                                            projectName: account.company_name,
-                                            contactPerson: Array.isArray(account.contact_person) ? account.contact_person.join(", ") : account.contact_person || "",
-                                            email: Array.isArray(account.email_address) ? account.email_address.join(", ") : account.email_address || "",
-                                            contactNumber: Array.isArray(account.contact_number) ? account.contact_number.join(", ") : account.contact_number || "",
-                                          }));
-                                          setIsCustomerSelected(true);
-                                          setOpenCustomer(false);
-                                        }}
-                                        className="text-[11px] font-bold uppercase"
-                                      >
-                                        <Check
-                                          className={cn(
-                                            "mr-2 h-4 w-4",
-                                            formData.projectName === account.company_name ? "opacity-100" : "opacity-0"
-                                          )}
-                                        />
-                                        {account.company_name}
-                                      </CommandItem>
-                                    ))}
-                                    {loadingMore && (
-                                      <div className="flex items-center justify-center py-4">
-                                        <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
-                                      </div>
-                                    )}
-                                  </CommandGroup>
-                                </CommandList>
-                              </Command>
-                            </PopoverContent>
-                          </Popover>
+                          <CustomerAccountPicker
+                            accounts={memoizedAccounts}
+                            totalAccounts={totalAccounts}
+                            selectedAccount={formData.projectName}
+                            searchQuery={searchQuery}
+                            onSearchChange={setSearchQuery}
+                            onLoadMore={loadMoreAccounts}
+                            loading={loadingAccounts}
+                            loadingMore={loadingMore}
+                            hasMore={hasMore}
+                            onSelect={(account) => {
+                              setFormData((prev) => ({
+                                ...prev,
+                                projectName: account.company_name,
+                                contactPerson: Array.isArray(account.contact_person)
+                                  ? account.contact_person.join(", ")
+                                  : account.contact_person || "",
+                                email: Array.isArray(account.email_address)
+                                  ? account.email_address.join(", ")
+                                  : account.email_address || "",
+                                contactNumber: Array.isArray(account.contact_number)
+                                  ? account.contact_number.join(", ")
+                                  : account.contact_number || "",
+                              }));
+                              setIsCustomerSelected(true);
+                            }}
+                          />
                         </div>
                         <div className="space-y-1.5">
                           <Label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5">

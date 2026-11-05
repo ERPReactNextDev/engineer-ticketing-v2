@@ -601,7 +601,7 @@ export function CollaborationHub({
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-[100]">
+    <div data-job-request-chat className="fixed bottom-6 right-6 z-[100]">
       <Popover open={isOpen} onOpenChange={(val) => {
         setIsOpen(val);
         if (!val) {
@@ -623,7 +623,7 @@ export function CollaborationHub({
           </button>
         </PopoverTrigger>
 
-        <PopoverContent side="top" align="end" sideOffset={20} className="w-[380px] p-0 border-none shadow-2xl rounded-[32px] overflow-hidden max-w-[95vw]">
+        <PopoverContent data-job-request-chat side="top" align="end" sideOffset={20} className="w-[380px] p-0 border-none shadow-2xl rounded-[32px] overflow-hidden max-w-[95vw]">
           <div className="flex flex-col h-[580px] bg-[#f8fafc] max-h-[85vh] relative">
             
             <div className="p-5 bg-slate-900 text-white shrink-0">

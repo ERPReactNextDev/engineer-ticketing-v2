@@ -21,6 +21,10 @@ export type JobRequestRow = JsonRecord & {
   totalWorkingDays?: number | null;
   scopeOfWork?: string | null;
   scopeQty?: number | null;
+  pdDatabaseImages?: string | null;
+  pdDatabaseItemCodes?: string | null;
+  pdDatabaseQuantities?: string | null;
+  pdDatabaseDescriptions?: string[] | null;
   created_at?: string | Date | null;
   updated_at?: string | Date | null;
   memberNotes?: string | null;

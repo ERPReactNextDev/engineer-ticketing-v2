@@ -13,6 +13,7 @@ create table if not exists public.job_requests (
   location_coordinates jsonb not null default '{}'::jsonb,
   agent_name text,
   contact_person text,
+  contact_designation text,
   email text,
   contact_number text,
   scope_of_work text,
@@ -80,6 +81,9 @@ create table if not exists public.job_requests (
 
 alter table public.job_requests
   add column if not exists scope_qty integer;
+
+alter table public.job_requests
+  add column if not exists contact_designation text;
 
 -- Safe to run on a table created before `total_working_days` was added.
 alter table public.job_requests

@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Image from "next/image";
 import {
   Clock, RefreshCcw, CheckCircle2, History, Loader2,
   ShieldCheck, ChevronLeft, Image as ImageIcon, ExternalLink,
@@ -61,6 +62,93 @@ const STATUS_ORDER = [
   "JR FORM APPROVED BY PROCUREMENT",
 ];
 
+type PdDatabaseRequestItem = {
+  productId: string;
+  productName: string;
+  itemCode: string;
+  imageUrl: string;
+  quantity: number;
+  description: string;
+};
+
+function getPdDatabaseItems(job: Record<string, unknown> | null | undefined): PdDatabaseRequestItem[] {
+  if (!job) return [];
+  const splitValues = (value: unknown) => typeof value === "string" && value.trim()
+    ? value.split(",")
+    : [];
+  const imageUrls = splitValues(job.pdDatabaseImages ?? job.pd_database_images)
+    .map((url) => url.replace(/%2C/gi, ","));
+  const itemCodes = splitValues(job.pdDatabaseItemCodes ?? job.pd_database_item_codes);
+  const quantities = splitValues(job.pdDatabaseQuantities ?? job.pd_database_quantities);
+  let descriptions: string[] = [];
+  const rawDescriptions = job.pdDatabaseDescriptions ?? job.pd_database_descriptions;
+  if (Array.isArray(rawDescriptions)) {
+    descriptions = rawDescriptions.map((value) => String(value ?? ""));
+  } else if (typeof rawDescriptions === "string" && rawDescriptions.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(rawDescriptions);
+      if (Array.isArray(parsed)) descriptions = parsed.map((value) => String(value ?? ""));
+    } catch (error) {
+      console.error("JOB_REQUEST_PD_DESCRIPTIONS_PARSE_ERROR", error);
+    }
+  }
+
+  const count = Math.max(imageUrls.length, itemCodes.length, quantities.length, descriptions.length);
+  return Array.from({ length: count }, (_, index) => {
+    const itemCode = itemCodes[index]?.trim() ?? "";
+    const description = descriptions[index] ?? "";
+    const quantity = Number(quantities[index]);
+    return {
+      productId: `${itemCode}-${index}`,
+      productName: itemCode || "PD Database item",
+      itemCode,
+      imageUrl: imageUrls[index]?.trim() ?? "",
+      quantity: Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 1,
+      description,
+    };
+  });
+}
+
+function formatLocalCalendarDate(value: unknown): string {
+  if (typeof value !== "string" && !(value instanceof Date)) return "N/A";
+  if (typeof value === "string" && !value.trim()) return "N/A";
+  const date = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00`)
+    : new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "N/A"
+    : date.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+function PdDatabaseItemsView({ items }: { items: PdDatabaseRequestItem[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 border-b border-slate-50 pb-1.5">
+        <ImageIcon size={12} className="text-blue-500" />
+        <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">PD Database Items</span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {items.map((item, index) => (
+          <div key={`${item.productId}-${index}`} className="flex min-w-0 items-center gap-3 rounded-lg border border-slate-200 p-2.5">
+            {item.imageUrl ? (
+              <Image src={item.imageUrl} alt={item.productName} width={56} height={56} unoptimized className="size-14 shrink-0 rounded-md border object-cover" />
+            ) : (
+              <div className="grid size-14 shrink-0 place-items-center rounded-md border bg-slate-50 text-[8px] font-bold text-slate-400">No image</div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[10px] font-bold text-slate-800">{item.productName}</p>
+              <p className="text-[9px] text-blue-700">Item code: {item.itemCode || "—"}</p>
+              <p className="text-[9px] font-semibold text-slate-600">Quantity: {item.quantity}</p>
+              {item.description && <p className="mt-1 whitespace-pre-wrap break-words text-[9px] text-slate-600">{item.description}</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function JobDetailsPage() {
   const params = useParams() as { id: string };
   const router = useRouter();
@@ -90,28 +178,72 @@ export default function JobDetailsPage() {
   const [fillUpDraft, setFillUpDraft] = useState<FillUpDraft | null>(null);
   const [draftToLoad, setDraftToLoad] = useState<FillUpDraft | null>(null);
 
-  const status = data?.status?.toUpperCase() || "JR FORM FORWARD TO ENGINEERING";
+  const status = data?.status?.trim().toUpperCase() || "JR FORM FORWARD TO ENGINEERING";
+  const pdDatabaseItems = getPdDatabaseItems(data);
   const requestReference = data?.jobRequestNo || params.id.slice(-8).toUpperCase();
   const isAdmin = userContext.role === "admin" || userContext.role === "it";
-  const isEngineering = userContext.department === "engineering";
-  const isProcurement = userContext.department === "procurement";
-  const isSales = userContext.department === "sales";
-  const isEngineeringManager = isEngineering && userContext.engiconnectRole?.toUpperCase() === "MANAGER";
-  const isEngineeringMember = isEngineering && userContext.engiconnectRole?.toUpperCase() === "MEMBER";
-  const isEngineeringLeader = isEngineering && userContext.engiconnectRole?.toUpperCase() === "LEADER";
+  const department = userContext.department.trim().toLowerCase();
+  const engineeringRole = userContext.engiconnectRole.trim().toUpperCase();
+  const isEngineering =
+    department.includes("engineering") ||
+    ["ENGINEERING ASSOCIATE", "E ASSOCIATE", "ENGINEERING LEADER", "E LEADER", "ENGINEERING MANAGER", "E MANAGER"].includes(engineeringRole);
+  const isProcurement = department === "procurement";
+  const isSales = department === "sales";
+  const isEngineeringManager =
+    isEngineering && ["MANAGER", "ENGINEERING MANAGER", "E MANAGER"].includes(engineeringRole);
+  const isEngineeringMember =
+    isEngineering && ["MEMBER", "ASSOCIATE", "ENGINEERING ASSOCIATE", "E ASSOCIATE"].includes(engineeringRole);
+  const isEngineeringLeader =
+    isEngineering && ["LEADER", "ENGINEERING LEADER", "E LEADER"].includes(engineeringRole);
   // 0 = Engineering, 1 = Eng Leader, 2 = Eng Manager, 3 = Procurement, 4 = Procurement Approved
   const stepIndex = status === "COMPLETED" ? 3 : Math.max(0, STATUS_ORDER.indexOf(status));
   const isAtProcurementStage = status === "JR FORM FORWARD TO PROCUREMENT";
   const isApprovedByProcurement = status === "JR FORM APPROVED BY PROCUREMENT";
+  const isEngineeringWorkflowStage = [
+    "JR FORM FORWARD TO ENGINEERING",
+    "JR FORM FORWARD TO ENGINEERING LEADER",
+    "JR FORM FORWARD TO ENGINEERING MANAGER",
+  ].includes(status);
+  const isEngineeringApprover = isEngineeringMember || isEngineeringLeader || isEngineeringManager;
+  const isEngineeringFormLockedAtProcurement =
+    isEngineeringApprover && (isAtProcurementStage || isApprovedByProcurement);
   // Who can edit which internal notes (IT/Admin can edit all, Procurement can only edit its own)
   // Notes become read-only when status has progressed past their approval stage
   // Each role can only edit their own notes while the request is at THEIR stage.
   // Once they click approval, the status moves forward and their notes become read-only.
   const canEditMemberNotes = !isProcurement && (isAdmin || (isEngineeringMember && status === "JR FORM FORWARD TO ENGINEERING"));
-  const canEditLeaderNotes = !isProcurement && (isAdmin || (isEngineeringLeader && status === "JR FORM FORWARD TO ENGINEERING LEADER"));
-  const canEditManagerNotes = !isProcurement && (isAdmin || (isEngineeringManager && status === "JR FORM FORWARD TO ENGINEERING MANAGER"));
+  const canEditLeaderNotes = !isProcurement && (isAdmin || (isEngineeringLeader && isEngineeringWorkflowStage));
+  const canEditManagerNotes = !isProcurement && (isAdmin || (isEngineeringManager && isEngineeringWorkflowStage));
   // Procurement edits only its own notes, only while the request is at the procurement stage. IT/Admin can edit all.
   const canEditProcurementNotes = isAdmin || (isProcurement && status === "JR FORM FORWARD TO PROCUREMENT");
+  const fillUpRemarksLabel = isProcurement
+    ? "Procurement Notes"
+    : isEngineeringLeader
+    ? "Leader Notes"
+    : isEngineeringManager
+    ? "Manager Notes"
+    : "Member Notes";
+  const fillUpRemarks = isProcurement
+    ? procurementNotes
+    : isEngineeringLeader
+    ? leaderNotes
+    : isEngineeringManager
+    ? managerNotes
+    : memberNotes;
+  const canEditFillUpRemarks = isProcurement
+    ? canEditProcurementNotes
+    : isEngineeringLeader
+    ? canEditLeaderNotes
+    : isEngineeringManager
+    ? canEditManagerNotes
+    : canEditMemberNotes;
+  const setFillUpRemarks = isProcurement
+    ? setProcurementNotes
+    : isEngineeringLeader
+    ? setLeaderNotes
+    : isEngineeringManager
+    ? setManagerNotes
+    : setMemberNotes;
   // Show console for: IT (always), all Engineering roles (always to see all remarks across all statuses), Procurement
   const showEngineerConsole =
     isAdmin ||
@@ -127,10 +259,17 @@ export default function JobDetailsPage() {
           id: userId,
           referenceId: user.ReferenceID || "",
           name: `${user.Firstname} ${user.Lastname}`,
-          role: user.Department?.toLowerCase() || "",
+          role: (user.Department || user.department || "").trim().toLowerCase(),
           profilePicture: user.profilePicture || "",
-          department: user.Department?.toLowerCase() || "",
-          engiconnectRole: user.engiconnect_role?.trim().toLowerCase() || ""
+          department: (user.Department || user.department || localStorage.getItem("userDepartment") || "").trim().toLowerCase(),
+          engiconnectRole: (
+            user.engiconnect_role ||
+            user.Role ||
+            user.Position ||
+            localStorage.getItem("engiconnect_role") ||
+            localStorage.getItem("userRole") ||
+            ""
+          ).trim().toLowerCase()
         }));
     }
 
@@ -282,18 +421,30 @@ export default function JobDetailsPage() {
   };
 
   // Determine if Fill Up Form should be read-only based on status and user role
-  // Read-only when:
-  // - status is LEADER for Engineering Member or Leader
-  // - status is MANAGER for Engineering Member, Leader, or Manager
-  // - status is PROCUREMENT for all Engineering roles
-  // - status is APPROVED BY PROCUREMENT for all Engineering roles
+  // - status is LEADER for Engineering Member
+  // - status is MANAGER for Engineering Member or Leader
+  // - status is PROCUREMENT or APPROVED BY PROCUREMENT for all Engineering approvers
   // - user is Procurement (only the procurement columns are editable, see procurementEditable)
   const isFillUpFormReadOnly =
     isProcurement ||
-    (status === "JR FORM FORWARD TO ENGINEERING LEADER" && (isEngineeringMember || isEngineeringLeader)) ||
-    (status === "JR FORM FORWARD TO ENGINEERING MANAGER" && (isEngineeringMember || isEngineeringLeader || isEngineeringManager)) ||
-    (status === "JR FORM FORWARD TO PROCUREMENT" && isEngineering) ||
-    (isApprovedByProcurement && isEngineering);
+    (status === "JR FORM FORWARD TO ENGINEERING LEADER" && isEngineeringMember) ||
+    (status === "JR FORM FORWARD TO ENGINEERING MANAGER" && (isEngineeringMember || isEngineeringLeader)) ||
+    isEngineeringFormLockedAtProcurement;
+  const fillUpAdvanceActions = isEngineeringMember && status === "JR FORM FORWARD TO ENGINEERING"
+    ? [{ label: "For Approval of Engineering Leader", status: "JR FORM FORWARD TO ENGINEERING LEADER" }]
+    : isEngineeringLeader && isEngineeringWorkflowStage
+    ? [
+        { label: "Return to Engineering Associate", status: "JR FORM FORWARD TO ENGINEERING" },
+        { label: "For Approval of Engineering Manager", status: "JR FORM FORWARD TO ENGINEERING MANAGER" },
+        { label: "Mark as Finished", status: "JR Form Forward to Procurement" },
+      ]
+    : isEngineeringManager && isEngineeringWorkflowStage
+    ? [
+        { label: "Return to Engineering Leader", status: "JR FORM FORWARD TO ENGINEERING LEADER" },
+        { label: "Return to Engineering Associate", status: "JR FORM FORWARD TO ENGINEERING" },
+        { label: "Mark as Finished", status: "JR Form Forward to Procurement" },
+      ]
+    : undefined;
 
   // Draft that procurement can view: the job_fill_ups draft, or the copy saved
   // inside the job request (fillUpForm) as a fallback
@@ -320,7 +471,7 @@ export default function JobDetailsPage() {
     boqSections: BoqSection[],
     summary: BoqSummary,
     procurement?: ProcurementData
-  ) => {
+  ): Promise<FillUpDraft> => {
     const savedDraft = await saveBoqDraft(params.id, {
       values,
       boqSections,
@@ -332,6 +483,7 @@ export default function JobDetailsPage() {
       updatedBy: userContext.name,
     });
     setFillUpDraft(savedDraft as FillUpDraft);
+    return savedDraft as FillUpDraft;
   };
 
   /**
@@ -357,23 +509,34 @@ export default function JobDetailsPage() {
     setFillUpDraft(savedDraft as FillUpDraft);
   };
 
-  const handleUpdateStatus = async (newStatus: string) => {
+  const handleUpdateStatus = async (
+    newStatus: string,
+    draftOverride?: FillUpDraft | null,
+    remarksOverride?: string
+  ): Promise<boolean> => {
     setIsUpdating(true);
     try {
+      const currentFillUpDraft = draftOverride ?? fillUpDraft;
       const now = new Date().toISOString();
       const updateData: Record<string, unknown> = {
         status: newStatus,
         // Only save the notes this user is allowed to edit, so other roles' notes are never overwritten
-        ...(canEditMemberNotes ? { memberNotes } : {}),
-        ...(canEditLeaderNotes ? { leaderNotes } : {}),
-        ...(canEditManagerNotes ? { managerNotes } : {}),
-        ...(canEditProcurementNotes ? { procurementNotes } : {}),
+        ...(canEditMemberNotes ? { memberNotes: remarksOverride ?? memberNotes } : {}),
+        ...(canEditLeaderNotes ? { leaderNotes: remarksOverride ?? leaderNotes } : {}),
+        ...(canEditManagerNotes ? { managerNotes: remarksOverride ?? managerNotes } : {}),
+        ...(canEditProcurementNotes ? { procurementNotes: remarksOverride ?? procurementNotes } : {}),
         updatedAt: now,
       };
 
       const isForwardToProcurement = newStatus === "JR Form Forward to Procurement";
       const isForwardToEngineeringManager = newStatus === "JR FORM FORWARD TO ENGINEERING MANAGER";
       const isForwardToEngineeringLeader = newStatus === "JR FORM FORWARD TO ENGINEERING LEADER";
+      const isReturnToEngineeringAssociate =
+        newStatus === "JR FORM FORWARD TO ENGINEERING" &&
+        (isEngineeringLeader || isEngineeringManager);
+      const isReturnToEngineeringLeader =
+        newStatus === "JR FORM FORWARD TO ENGINEERING LEADER" &&
+        isEngineeringManager;
 
       // Save the approval of the stage being COMPLETED by the person who clicked
       // (Member -> Leader button, Leader -> Manager button, Manager -> Procurement button)
@@ -394,13 +557,13 @@ export default function JobDetailsPage() {
       };
 
       // NEW: remove approval fields of stages that haven't happened yet
-      const clearApproval = (role: "Leader" | "Manager") => {
+      const clearApproval = (role: "Member" | "Leader" | "Manager") => {
         updateData[`engineering${role}ApprovedAt`] = null;
         updateData[`approvedByEngineering${role}`] = null;
         updateData[`approvedByEngineering${role}Signature`] = null;
       };
 
-      if (isForwardToEngineeringLeader && status === "JR FORM FORWARD TO ENGINEERING") {
+      if (isForwardToEngineeringLeader && isEngineeringMember && status === "JR FORM FORWARD TO ENGINEERING") {
         await saveApproval("Member");
         clearApproval("Leader");   // NEW
         clearApproval("Manager");  // NEW
@@ -410,8 +573,23 @@ export default function JobDetailsPage() {
         clearApproval("Manager");  // NEW
       }
       if (isForwardToProcurement) {
-        await saveApproval("Manager");
+        if (isEngineeringLeader) {
+          await saveApproval("Leader");
+          clearApproval("Manager");
+        } else {
+          await saveApproval("Manager");
+        }
         updateData.completedAt = now;
+      }
+      if (isReturnToEngineeringAssociate) {
+        clearApproval("Member");
+        clearApproval("Leader");
+        clearApproval("Manager");
+        updateData.completedAt = null;
+      } else if (isReturnToEngineeringLeader) {
+        clearApproval("Leader");
+        clearApproval("Manager");
+        updateData.completedAt = null;
       }
 
       // Procurement approval
@@ -420,15 +598,15 @@ export default function JobDetailsPage() {
         updateData.approvedByProcurement = userContext.referenceId;
         updateData.approvedByProcurementName = userContext.name;
         // SAY (rounded total) is copied here so Sales can read it from the job request
-        updateData.procurementSay = fillUpDraft?.procurement?.summary?.say ?? null;
+        updateData.procurementSay = currentFillUpDraft?.procurement?.summary?.say ?? null;
 // Full procurement computation snapshot (summary only, no per-item rows)
-if (fillUpDraft?.procurement) {
+if (currentFillUpDraft?.procurement) {
   updateData.procurementSummary = JSON.parse(
     JSON.stringify({
-      ...fillUpDraft.procurement.summary,
-      warrantyPct: fillUpDraft.procurement.warrantyPct,
-      contingencyPct: fillUpDraft.procurement.contingencyPct,
-      markup: fillUpDraft.procurement.markup,
+      ...currentFillUpDraft.procurement.summary,
+      warrantyPct: currentFillUpDraft.procurement.warrantyPct,
+      contingencyPct: currentFillUpDraft.procurement.contingencyPct,
+      markup: currentFillUpDraft.procurement.markup,
     })
   );
 }
@@ -443,9 +621,9 @@ if (fillUpDraft?.procurement) {
         }
       }
 
-      // Upload PDFs and add URLs if marking as JR Form Forward to Procurement, Engineering Manager or Engineering Leader
+      // Only Admin can upload PDFs when advancing a request.
       if (isForwardToProcurement || isForwardToEngineeringManager || isForwardToEngineeringLeader) {
-        if (signedJRForm) {
+        if (isAdmin && signedJRForm) {
           try {
             const signedJRFormUrl = await uploadPDF(signedJRForm, "job-signed-jr-forms");
             updateData.signedJRFormUrl = signedJRFormUrl;
@@ -456,7 +634,7 @@ if (fillUpDraft?.procurement) {
           }
         }
 
-        if (scopeOfWork) {
+        if (isAdmin && scopeOfWork) {
           try {
             const scopeOfWorkUrl = await uploadPDF(scopeOfWork, "job-scope-of-work");
             updateData.scopeOfWorkUrl = scopeOfWorkUrl;
@@ -467,31 +645,43 @@ if (fillUpDraft?.procurement) {
           }
         }
 
-        // Copy the saved Fill Up Form draft into the job request (column: fillUpForm)
-        // NOTE: procurement data is intentionally NOT copied here.
-        if (fillUpDraft) {
-          updateData.fillUpForm = {
-            values: fillUpDraft.values,
-            boqSections: fillUpDraft.boqSections,
-            summary: fillUpDraft.summary,
-            savedBy: fillUpDraft.createdByName || "",
-            savedAt: fillUpDraft.createdAt ?? null,
-          };
-        }
+      }
+
+      // Copy the saved Fill Up Form draft into the job request (column: fillUpForm)
+      // NOTE: procurement data is intentionally NOT copied here.
+      if (
+        currentFillUpDraft &&
+        (isForwardToProcurement ||
+          isForwardToEngineeringManager ||
+          isForwardToEngineeringLeader ||
+          isReturnToEngineeringAssociate ||
+          isReturnToEngineeringLeader)
+      ) {
+        updateData.fillUpForm = {
+          values: currentFillUpDraft.values,
+          boqSections: currentFillUpDraft.boqSections,
+          summary: currentFillUpDraft.summary,
+          savedBy: currentFillUpDraft.createdByName || "",
+          savedAt: currentFillUpDraft.createdAt ?? null,
+        };
       }
 
       // Update the Job Request in Supabase, then record BOQ draft completion.
       const updatedRequest = await updateJobRequest(params.id, updateData);
       setData(updatedRequest);
-      if (isForwardToProcurement && fillUpDraft) {
+      if (canEditMemberNotes && remarksOverride !== undefined) setMemberNotes(remarksOverride);
+      if (canEditLeaderNotes && remarksOverride !== undefined) setLeaderNotes(remarksOverride);
+      if (canEditManagerNotes && remarksOverride !== undefined) setManagerNotes(remarksOverride);
+      if (canEditProcurementNotes && remarksOverride !== undefined) setProcurementNotes(remarksOverride);
+      if (isForwardToProcurement && currentFillUpDraft) {
         const completedDraft = await saveBoqDraft(params.id, {
-          values: fillUpDraft.values,
-          boqSections: fillUpDraft.boqSections,
-          summary: fillUpDraft.summary,
-          ...(fillUpDraft.procurement ? { procurement: fillUpDraft.procurement } : {}),
+          values: currentFillUpDraft.values,
+          boqSections: currentFillUpDraft.boqSections,
+          summary: currentFillUpDraft.summary,
+          ...(currentFillUpDraft.procurement ? { procurement: currentFillUpDraft.procurement } : {}),
           status: "completed",
-          createdBy: fillUpDraft.createdBy ?? userContext.id,
-          createdByName: fillUpDraft.createdByName ?? userContext.name,
+          createdBy: currentFillUpDraft.createdBy ?? userContext.id,
+          createdByName: currentFillUpDraft.createdByName ?? userContext.name,
           updatedBy: userContext.name,
           completedAt: new Date().toISOString(),
           completedBy: userContext.name,
@@ -500,9 +690,11 @@ if (fillUpDraft?.procurement) {
       }
 
       toast.success(`Request marked as ${newStatus.toLowerCase()}`);
+      return true;
     } catch (err) {
       console.error("UPDATE_STATUS_ERROR", err);
       toast.error("Failed to update status");
+      return false;
     } finally {
       setIsUpdating(false);
     }
@@ -612,7 +804,7 @@ if (fillUpDraft?.procurement) {
 
     return (
       <div className={compact ? "space-y-2" : "space-y-3"}>
-        {fields.map(f => (
+        {fields.filter(f => f.editable || f.value.trim().length > 0).map(f => (
           <div key={f.key} className="space-y-1">
             <Label className={cn("font-black text-slate-400 uppercase tracking-widest", compact ? "text-[8px]" : "text-[9px]")}>
               {f.label}{!f.editable && " (read only)"}
@@ -626,7 +818,7 @@ if (fillUpDraft?.procurement) {
                 compact ? "min-h-[50px] text-[11px] placeholder:text-slate-700" : "min-h-[80px] text-[12px] text-white",
                 f.editable ? "bg-black/30" : "bg-black/10 text-slate-400 cursor-default focus-visible:ring-0"
               )}
-              placeholder={f.editable ? `${f.label}...` : "No notes yet"}
+              placeholder={`${f.label}...`}
             />
           </div>
         ))}
@@ -634,28 +826,7 @@ if (fillUpDraft?.procurement) {
     );
   };
 
-  const hasCoords = !!data?.locationCoordinates?.lat && !!data?.locationCoordinates?.lng;
-  const mapsUrl = hasCoords
-    ? `https://www.google.com/maps?q=${data.locationCoordinates.lat},${data.locationCoordinates.lng}`
-    : data?.location
-    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(data.location)}`
-    : "";
-
-  const locationNode = data?.location ? (
-    <span className="flex flex-col gap-1">
-      <span>{data.location}</span>
-      {mapsUrl && (
-        <a
-          href={mapsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-[10px] font-black text-blue-600 hover:underline normal-case"
-        >
-          <MapPin size={10} /> Open in Google Maps <ExternalLink size={9} />
-        </a>
-      )}
-    </span>
-  ) : null;
+  const locationNode = data?.location || null;
 
   return (
     <ProtectedPageWrapper>
@@ -839,8 +1010,8 @@ if (fillUpDraft?.procurement) {
                           </Button>
                         )}
 
-                        {/* PDF Upload Fields - Hidden for Procurement */}
-                        {!isProcurement && (
+                        {/* PDF uploads are Admin-only. */}
+                        {isAdmin && (
                         <div className="space-y-2">
                           <div className="space-y-1">
                             <Label className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Signed JR Form (Optional)</Label>
@@ -939,36 +1110,6 @@ if (fillUpDraft?.procurement) {
                               </Button>
                             </>
                           )}
-                          {/* Engineering + MEMBER: Show "For Approval of Engineering Leader" */}
-                          {isEngineeringMember && (
-                            <Button
-                              onClick={() => handleUpdateStatus("JR FORM FORWARD TO ENGINEERING LEADER")}
-                              disabled={isUpdating || status !== "JR FORM FORWARD TO ENGINEERING"}
-                              className="w-full h-12 bg-[#00C853] disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black uppercase text-[11px] tracking-widest rounded-xl shadow-lg shadow-emerald-900/40"
-                            >
-                              {isUpdating ? "Saving..." : "For Approval of Engineering Leader"}
-                            </Button>
-                          )}
-                          {/* Engineering + LEADER: Show "For Approval of Engineering Manager" */}
-                          {isEngineeringLeader && (
-                            <Button
-                              onClick={() => handleUpdateStatus("JR FORM FORWARD TO ENGINEERING MANAGER")}
-                              disabled={isUpdating || status !== "JR FORM FORWARD TO ENGINEERING LEADER"}
-                              className="w-full h-12 bg-[#00C853] disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black uppercase text-[11px] tracking-widest rounded-xl shadow-lg shadow-emerald-900/40"
-                            >
-                              {isUpdating ? "Saving..." : "For Approval of Engineering Manager"}
-                            </Button>
-                          )}
-                          
-                          {isEngineeringManager && (
-                            <Button
-                              onClick={() => handleUpdateStatus("JR Form Forward to Procurement")}
-                              disabled={isUpdating || status !== "JR FORM FORWARD TO ENGINEERING MANAGER"}
-                              className="w-full h-12 bg-[#00C853] disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black uppercase text-[11px] tracking-widest rounded-xl shadow-lg shadow-emerald-900/40"
-                            >
-                              {isUpdating ? "Saving..." : "Mark as Finished"}
-                            </Button>
-                          )}
                         </div>
                         )}
 
@@ -1027,11 +1168,12 @@ if (fillUpDraft?.procurement) {
                       <ManifestItem label="Project Title" value={data?.projectTitle} icon={FileText} />
                       <ManifestItem label="Location" value={locationNode} icon={MapPin} isLongText />
 
-                      {(data?.contactPerson || data?.email || data?.contactNumber) && (
-                        <div className="grid grid-cols-[1fr_1.4fr_1fr] gap-4">
+                      {(data?.contactPerson || data?.contactDesignation || data?.email || data?.contactNumber) && (
+                        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
                           <ManifestItem label="Contact Person" value={data?.contactPerson} icon={User} />
-                          <ManifestItem label="Email" value={data?.email} icon={Send} canCopy />
-                          <ManifestItem label="Contact No." value={data?.contactNumber} icon={Radio} canCopy />
+                          <ManifestItem label="Designation" value={data?.contactDesignation || "Not provided"} icon={Briefcase} />
+                          <ManifestItem label="Email address" value={data?.email || "Not provided"} icon={Send} canCopy />
+                          <ManifestItem label="Contact number" value={data?.contactNumber || "Not provided"} icon={Radio} canCopy />
                         </div>
                       )}
 
@@ -1042,10 +1184,10 @@ if (fillUpDraft?.procurement) {
                         <ManifestItem label="Client Name" value={data?.clientName || "GENERAL"} icon={Building2} />
                         <ManifestItem label="Urgency" value={data?.priority} icon={ShieldAlert} color={data?.priority === 'HIGH' ? 'text-red-600' : 'text-blue-600'} />
                         <ManifestItem 
-                          label="Work Hours" 
+                          label="Preferred Date Finish"
                           value={
                             (data?.workingTimeFrom || data?.workingTimeTo)
-                              ? `${data?.workingTimeFrom ? new Date(data.workingTimeFrom).toLocaleString() : 'N/A'} - ${data?.workingTimeTo ? new Date(data.workingTimeTo).toLocaleString() : 'N/A'}`
+                              ? `${formatLocalCalendarDate(data?.workingTimeFrom)} - ${formatLocalCalendarDate(data?.workingTimeTo)}`
                               : data?.workingTime || "N/A"
                           } 
                           icon={Clock} 
@@ -1053,7 +1195,6 @@ if (fillUpDraft?.procurement) {
                         <ManifestItem label="Working Days" value={data?.workingDays?.join(", ") || "N/A"} icon={Calendar} />
                         <ManifestItem label="Total Days" value={typeof data?.totalWorkingDays === "number" ? String(data.totalWorkingDays) : "N/A"} icon={Calendar} />
                       </div>
-
                       <Separator className="bg-slate-50" />
 
                       {/* Section 3: Work Services & Height */}
@@ -1089,6 +1230,7 @@ if (fillUpDraft?.procurement) {
                         {data?.scopeQty != null && <ManifestItem label="Scope Quantity" value={String(data.scopeQty)} icon={FileText} />}
                         <ManifestItem label="Detailed Scope of Work" value={data?.scopeOfWork} icon={FileText} isLongText />
                       </div>
+                      <PdDatabaseItemsView items={pdDatabaseItems} />
 
                       {(data?.tempFacility || data?.safetyInduction || data?.safetyNotes) && (
                         <>
@@ -1305,11 +1447,12 @@ if (fillUpDraft?.procurement) {
                       <ManifestItem label={requestorLabel} value={requestorValue} icon={hasAgent ? Fingerprint : User} />
                       <ManifestItem label="Project Title" value={data?.projectTitle} icon={FileText} />
                       <ManifestItem label="Location" value={locationNode} icon={MapPin} isLongText />
-                      {(data?.contactPerson || data?.email || data?.contactNumber) && (
-                        <div className="space-y-3">
+                      {(data?.contactPerson || data?.contactDesignation || data?.email || data?.contactNumber) && (
+                        <div className="grid grid-cols-2 gap-3">
                           <ManifestItem label="Contact Person" value={data?.contactPerson} icon={User} />
-                          <ManifestItem label="Email" value={data?.email} icon={Send} canCopy />
-                          <ManifestItem label="Contact No." value={data?.contactNumber} icon={Radio} canCopy />
+                          <ManifestItem label="Designation" value={data?.contactDesignation || "Not provided"} icon={Briefcase} />
+                          <ManifestItem label="Email address" value={data?.email || "Not provided"} icon={Send} canCopy />
+                          <ManifestItem label="Contact number" value={data?.contactNumber || "Not provided"} icon={Radio} canCopy />
                         </div>
                       )}
                     </div>
@@ -1322,10 +1465,10 @@ if (fillUpDraft?.procurement) {
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                         <ManifestItem 
-                          label="Hours" 
+                          label="Preferred Date Finish"
                           value={
                             (data?.workingTimeFrom || data?.workingTimeTo)
-                              ? `${data?.workingTimeFrom ? new Date(data.workingTimeFrom).toLocaleString() : 'N/A'} - ${data?.workingTimeTo ? new Date(data.workingTimeTo).toLocaleString() : 'N/A'}`
+                              ? `${formatLocalCalendarDate(data?.workingTimeFrom)} - ${formatLocalCalendarDate(data?.workingTimeTo)}`
                               : data?.workingTime || "N/A"
                           } 
                           icon={Clock} 
@@ -1371,6 +1514,7 @@ if (fillUpDraft?.procurement) {
                         {data?.scopeQty != null && <ManifestItem label="Scope Quantity" value={String(data.scopeQty)} icon={FileText} />}
                         <ManifestItem label="Description" value={data?.scopeOfWork} icon={FileText} isLongText />
                       </div>
+                      <PdDatabaseItemsView items={pdDatabaseItems} />
                     </div>
 
                     {/* Logistics */}
@@ -1561,8 +1705,8 @@ if (fillUpDraft?.procurement) {
                         </Button>
                       )}
 
-                      {/* PDF Upload Fields - Hidden for Procurement */}
-                      {!isProcurement && (
+                      {/* PDF uploads are Admin-only. */}
+                      {isAdmin && (
                       <div className="space-y-3">
                         <div className="space-y-1">
                           <Label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Signed JR Form (Optional)</Label>
@@ -1661,37 +1805,6 @@ if (fillUpDraft?.procurement) {
                             </Button>
                           </>
                         )}
-                        {/* Engineering + MEMBER: Show "For Approval of Engineering Leader" */}
-                        {isEngineeringMember && (
-                          <Button
-                            onClick={() => handleUpdateStatus("JR FORM FORWARD TO ENGINEERING LEADER")}
-                            disabled={isUpdating || status !== "JR FORM FORWARD TO ENGINEERING"}
-                            className="w-full h-12 bg-[#00C853] disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black uppercase text-[11px] tracking-widest rounded-xl shadow-lg shadow-emerald-900/40"
-                          >
-                            {isUpdating ? "Saving..." : "For Approval of Engineering Leader"}
-                          </Button>
-                        )}
-                        {/* Engineering + LEADER: Show "For Approval of Engineering Manager" */}
-                        {isEngineeringLeader && (
-                          <Button
-                            onClick={() => handleUpdateStatus("JR FORM FORWARD TO ENGINEERING MANAGER")}
-                            disabled={isUpdating || status !== "JR FORM FORWARD TO ENGINEERING LEADER"}
-                            className="w-full h-12 bg-[#00C853] disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black uppercase text-[11px] tracking-widest rounded-xl shadow-lg shadow-emerald-900/40"
-                          >
-                            {isUpdating ? "Saving..." : "For Approval of Engineering Manager"}
-                          </Button>
-                        )}
-                        {/* Engineering + MANAGER: Show "Mark as Finished" only when status is "JR FORM FORWARD TO ENGINEERING MANAGER" */}
-                      {/* Engineering + MANAGER: always visible, enabled only while it's the Manager's turn */}
-                      {isEngineeringManager && (
-                        <Button
-                          onClick={() => handleUpdateStatus("JR Form Forward to Procurement")}
-                          disabled={isUpdating || status !== "JR FORM FORWARD TO ENGINEERING MANAGER"}
-                          className="w-full h-12 bg-[#00C853] disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black uppercase text-[11px] tracking-widest rounded-xl shadow-lg shadow-emerald-900/40"
-                        >
-                          {isUpdating ? "Saving..." : "Mark as Finished"}
-                        </Button>
-                      )}
                       </div>
                       )}
 
@@ -1728,8 +1841,24 @@ if (fillUpDraft?.procurement) {
             open={fillUpFormOpen}
             onOpenChange={setFillUpFormOpen}
             requestId={params.id}
+            contactDetails={{
+              contactPerson: data?.contactPerson,
+              designation: data?.contactDesignation,
+              email: data?.email,
+              contactNumber: data?.contactNumber,
+            }}
+            preferredDateFinish={{
+              from: data?.workingTimeFrom,
+              to: data?.workingTimeTo,
+            }}
+            pdDatabaseItems={pdDatabaseItems}
             draft={draftToLoad}
             onSubmit={handleSaveFillUpDraft}
+            advanceActions={fillUpAdvanceActions}
+            onAdvance={handleUpdateStatus}
+            remarksLabel={fillUpRemarksLabel}
+            remarks={fillUpRemarks}
+            remarksEditable={canEditFillUpRemarks}
             readOnly={isFillUpFormReadOnly}
             showProcurement={isProcurement || isAdmin}
             procurementEditable={canEditProcurementNotes}

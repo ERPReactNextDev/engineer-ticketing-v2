@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FileText, Send, RotateCcw, Loader2, Lock, Plus, Minus, Trash2, ChevronDown, ChevronRight, ChevronUp, Upload, Calculator, Info } from "lucide-react";
+import Image from "next/image";
+import { FileText, Send, RotateCcw, Loader2, Lock, Plus, Minus, Trash2, ChevronDown, ChevronRight, ChevronUp, Upload, Calculator, Info, Image as ImageIcon } from "lucide-react";
 import { createPortal } from "react-dom";
 
 import { toast } from "sonner";
@@ -30,6 +31,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 /* ─────────────────────────────────────────────
    FIELD CONFIG (text only) — edit/add fields here
@@ -53,13 +55,13 @@ const SPAN_CLASS: Record<number, string> = {
 const FIELDS: FieldDef[] = [
   { key: "jrNumber", label: "JR Number", placeholder: "e.g. JR2026-0042", required: true, span: 1 },
   { key: "dateRequested", label: "Date Requested", placeholder: "e.g. October 14, 2026", span: 1 },
-  { key: "agentName", label: "Agent Name", placeholder: "Agent name", span: 1 },
-  { key: "projectTitle", label: "Project Title", placeholder: "Project title", required: true, span: 2 },
+  { key: "agentName", label: "Agent Number", placeholder: "Agent number", span: 1 },
+  { key: "projectTitle", label: "Project Title", placeholder: "Project title", required: true, span: 1 },
+  { key: "projectName", label: "Project / Site name", placeholder: "Project / site name", span: 1 },
   { key: "clientName", label: "Client Name", placeholder: "Client name", span: 1 },
   { key: "address", label: "Address", placeholder: "Site address", required: true, span: 3 },
-  { key: "projectDuration", label: "Project Duration", placeholder: "e.g. 10/14/2026 - 10/20/2026", span: 1 },
-  { key: "totalWorkingDays", label: "Total Working Days", placeholder: "e.g. 4", span: 2 },
   { key: "scopeOfWork", label: "Detailed Scope of Work", placeholder: "Describe the work...", multiline: true, required: true, span: 3 },
+  { key: "totalWorkingDays", label: "Number of Days", placeholder: "e.g. 4", span: 1 },
 ];
 
 const EMPTY_DATA: Record<string, string> = Object.fromEntries(FIELDS.map((f) => [f.key, ""]));
@@ -99,7 +101,7 @@ export type BoqRow = CustomPricingFields & {
   materialCost: string;
   laborCost: string;
   consumableCost: string;
-  /** TOOLS section only: "power" | "hand" | "safety" */
+  /** TOOLS section only: "general" | "power" | "hand" | "safety" */
   toolType?: string;
   /** Hand tools: how many usage */
   toolUsage?: string;
@@ -170,6 +172,15 @@ export type ProcurementData = {
   savedAt?: any;
 };
 
+export type PdDatabaseFormItem = {
+  productId: string;
+  productName: string;
+  itemCode: string;
+  imageUrl: string;
+  quantity: number;
+  description: string;
+};
+
 /**
  * A saved fill-up form (stored in the "boq_draft" table, keyed by job request id).
  * status: "draft" while waiting for engineering to finish, "completed" once it was copied
@@ -215,6 +226,7 @@ const isStandardTitle = (t: string) =>
   (STANDARD_SECTION_TITLES as readonly string[]).includes((t ?? "").trim().toUpperCase());
 
 const TOOL_TYPES = [
+  { value: "general", label: "General" },
   { value: "power", label: "Power Tools" },
   { value: "hand", label: "Hand Tools" },
   { value: "safety", label: "Safety Equipment / Miscellaneous" },
@@ -328,7 +340,10 @@ const rowTotals = (r: BoqRow, workingDays = 0, isTools = false, isRental = false
 
   let totalMaterialCost = qty * material;
   if (isTools) {
-    if (r.toolType === "hand") {
+    if (r.toolType === "general") {
+      // General tools use the standard quantity × cost calculation.
+      totalMaterialCost = qty * material;
+    } else if (r.toolType === "hand") {
       // Qty x Cost / Usage
       const usage = toNumber(r.toolUsage);
       if (usage > 0) totalMaterialCost = (qty * material) / usage;
@@ -567,35 +582,27 @@ const UNSAVED_CACHE = new Map<string, UnsavedSnapshot>();
 /* ─────────────────────────────────────────────
    HELPERS — map a job_requests row to form values
 ───────────────────────────────────────────── */
-const fmtDate = (value?: string | Date | null) => {
-  if (!value) return "N/A";
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? "N/A" : date.toLocaleDateString();
-};
-
 const formatRequestedDate = (value?: string | Date | null) => {
   if (!value) return "";
-  const date = value instanceof Date ? value : new Date(value);
+  const date = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00`)
+    : value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime())
     ? ""
     : date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 };
 
-async function resolveAgentName(job: Pick<JobRequestRow, "agentName" | "submittedByName">): Promise<string> {
-  const ref = job.agentName?.trim();
-  if (!ref) return job?.submittedByName || "";
-  try {
-    const res = await fetch(`/api/user-by-reference?referenceid=${encodeURIComponent(ref)}`);
-    const result = await res.json();
-    return result?.name || ref;
-  } catch (err) {
-    console.error("AGENT_NAME_FETCH_ERROR", err);
-    return ref;
-  }
-}
+const formatLocalCalendarDate = (value?: string | Date | null) => {
+  if (!value) return "N/A";
+  const date = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? new Date(`${value}T00:00:00`)
+    : value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "N/A"
+    : date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+};
 
 async function mapJobToFormValues(job: JobRequestRow): Promise<JobFillUpFormValues> {
-  const hasRange = job.workingTimeFrom || job.workingTimeTo;
   const totalWorkingDays = typeof job.totalWorkingDays === "number"
     ? String(job.totalWorkingDays)
     : "";
@@ -603,11 +610,11 @@ async function mapJobToFormValues(job: JobRequestRow): Promise<JobFillUpFormValu
   return {
     jrNumber: job.jobRequestNo || "",
     dateRequested: formatRequestedDate(job.createdAt),
-    agentName: await resolveAgentName(job),
+    agentName: job.agentName || "",
     projectTitle: job.projectTitle || "",
+    projectName: typeof job.projectName === "string" ? job.projectName : "",
     clientName: job.clientName || "GENERAL",
     address: job.location || "",
-    projectDuration: hasRange ? `${fmtDate(job.workingTimeFrom)} - ${fmtDate(job.workingTimeTo)}` : "",
     totalWorkingDays,
     scopeOfWork: job.scopeOfWork || "",
   };
@@ -618,6 +625,18 @@ interface JobFillUpFormDialogProps {
   onOpenChange: (open: boolean) => void;
   /** Supabase job_requests id (the id in /request/job/[id]). Form auto-populates from it. */
   requestId?: string;
+  contactDetails?: {
+    contactPerson?: string | null;
+    designation?: string | null;
+    email?: string | null;
+    contactNumber?: string | null;
+  };
+  preferredDateFinish?: {
+    from?: string | Date | null;
+    to?: string | Date | null;
+  };
+  pdDatabaseItems?: PdDatabaseFormItem[];
+  /** Allow Engineering Leader/Manager to edit the job request's total working days. */
   /**
    * View mode: shows the saved draft (see `draft`) with every input disabled and
    * no Clear / Submit buttons.
@@ -638,7 +657,13 @@ interface JobFillUpFormDialogProps {
     boqSections: BoqSection[],
     summary: BoqSummary,
     procurement?: ProcurementData
-  ) => void | Promise<void>;
+  ) => void | FillUpDraft | Promise<void | FillUpDraft>;
+  /** Workflow actions shown in the form footer. */
+  advanceActions?: { label: string; status: string }[];
+  onAdvance?: (status: string, draft?: FillUpDraft | null, remarks?: string) => Promise<boolean | void>;
+  remarksLabel: string;
+  remarks: string;
+  remarksEditable: boolean;
   /** Show the Procurement columns + summary (Procurement and IT/Admin only) */
   showProcurement?: boolean;
   /** Procurement inputs are editable */
@@ -692,9 +717,17 @@ export function JobFillUpFormDialog({
   open,
   onOpenChange,
   requestId,
+  contactDetails,
+  preferredDateFinish,
+  pdDatabaseItems = [],
   readOnly = false,
   draft = null,
   onSubmit,
+  advanceActions = [],
+  onAdvance,
+  remarksLabel,
+  remarks,
+  remarksEditable,
   showProcurement = false,
   procurementEditable = false,
   allowBoqCustomPricing: _allowBoqCustomPricing, // ignored: BOQ custom pricing is removed
@@ -706,8 +739,11 @@ export function JobFillUpFormDialog({
   const [boqSections, setBoqSections] = useState<BoqSection[]>([newBoqSection()]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingJob, setIsLoadingJob] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<"save" | "advance" | null>(null);
+  const [approvalRemarks, setApprovalRemarks] = useState("");
   // BOQ UI state: collapsed sections + which new section to scroll to
   const [collapsedIds, setCollapsedIds] = useState<string[]>([]);
+  const [activeBoqRowKey, setActiveBoqRowKey] = useState<string | null>(null);
   const [scrollToId, setScrollToId] = useState<string | null>(null);
   // Summary inputs
   const [contingencyPct, setContingencyPct] = useState(DEFAULT_CONTINGENCY);
@@ -721,6 +757,14 @@ export function JobFillUpFormDialog({
   const [procSectionCustom, setProcSectionCustom] = useState<Record<string, CustomPricingFields>>({});
   const [procSectionMult, setProcSectionMult] = useState<Record<string, string>>({});
   const [isSavingProc, setIsSavingProc] = useState(false);
+  const [selectedAdvanceStatus, setSelectedAdvanceStatus] = useState("");
+
+  const advanceAction =
+    advanceActions.find((action) => action.status === selectedAdvanceStatus) ?? advanceActions[0];
+
+  useEffect(() => {
+    if (open) setSelectedAdvanceStatus("");
+  }, [open]);
 
   // view mode shows the draft read-only, edit mode ("Load Draft") pre-fills the editable form
   const viewDraft = readOnly ? draft : null;
@@ -747,6 +791,7 @@ export function JobFillUpFormDialog({
     }
 
     setCollapsedIds([]);
+    setActiveBoqRowKey(null);
     const cached = UNSAVED_CACHE.get(cacheKey);
     const restoreProc = (c: UnsavedSnapshot) => {
       setProcRows(c.procRows);
@@ -822,13 +867,22 @@ export function JobFillUpFormDialog({
         }
         const mapped = await mapJobToFormValues(job);
         if (!cancelled) {
-          // Fields that come from the job request stay locked (fresh value wins over the draft)
-          const lockedFromJob = FIELDS.filter((f) => mapped[f.key]?.toString().trim()).map((f) => f.key);
+          // Job-request fields stay locked, but working days remain editable in the fill-up form.
+          const populatedJobFields = FIELDS.filter((f) => mapped[f.key]?.toString().trim());
+          const lockedFromJob = populatedJobFields
+            .filter((f) => f.key !== "totalWorkingDays")
+            .map((f) => f.key);
+          const editableWorkingDays = cached?.values.totalWorkingDays !== undefined
+            ? cached.values.totalWorkingDays
+            : editDraft?.values.totalWorkingDays;
           setValues({
             ...EMPTY_DATA,
             ...(editDraft?.values ?? {}),
             ...(cached?.values ?? {}),
-            ...Object.fromEntries(lockedFromJob.map((k) => [k, mapped[k]])),
+            ...Object.fromEntries(populatedJobFields.map((f) => [f.key, mapped[f.key]])),
+            ...(editableWorkingDays !== undefined
+              ? { totalWorkingDays: editableWorkingDays }
+              : {}),
           });
           setLockedKeys(lockedFromJob);
         }
@@ -1382,7 +1436,7 @@ export function JobFillUpFormDialog({
     setProcSectionMult({});
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (advance = false) => {
     const missing = FIELDS.filter((f) => f.required && !values[f.key]?.trim());
     if (missing.length > 0) {
       return toast.error(`Please fill in: ${missing.map((f) => f.label).join(", ")}`);
@@ -1403,9 +1457,20 @@ export function JobFillUpFormDialog({
 
     setIsSubmitting(true);
     try {
-      await onSubmit?.(values, cleanedBoq, finalSummary, canEditProc ? buildProcurement() : undefined);
+      const savedDraft = await onSubmit?.(
+        values,
+        cleanedBoq,
+        finalSummary,
+        canEditProc ? buildProcurement() : undefined
+      );
+      if (advance && advanceAction) {
+        const advanced = await onAdvance?.(advanceAction.status, savedDraft ?? draft, approvalRemarks);
+        if (advanced === false) return;
+        toast.success("Fill up form saved and request updated");
+      } else {
+        toast.success("Fill up form saved as draft");
+      }
       UNSAVED_CACHE.delete(cacheKey);
-      toast.success("Fill up form saved as draft");
       onOpenChange(false);
     } catch (err) {
       console.error("FILL_UP_FORM_ERROR", err);
@@ -1413,6 +1478,81 @@ export function JobFillUpFormDialog({
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleAdvanceReadOnly = async () => {
+    if (!advanceAction || !onAdvance) return;
+    setIsSubmitting(true);
+    try {
+      const advanced = await onAdvance(advanceAction.status, draft, approvalRemarks);
+      if (advanced === false) return;
+      onOpenChange(false);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const openAdvanceConfirmation = () => {
+    if (!advanceAction) return;
+    setApprovalRemarks(remarks);
+    setPendingConfirmation("advance");
+  };
+
+  const confirmPendingAction = async () => {
+    const action = pendingConfirmation;
+    if (action === "advance" && !approvalRemarks.trim()) return;
+    setPendingConfirmation(null);
+    if (action === "save") {
+      await handleSubmit();
+    } else if (action === "advance") {
+      if (readOnly) await handleAdvanceReadOnly();
+      else await handleSubmit(true);
+    }
+  };
+
+  const renderAdvanceControl = () => {
+    if (!advanceAction) return null;
+    if (advanceActions.length === 1) {
+      return (
+        <Button
+          type="button"
+          onClick={openAdvanceConfirmation}
+          disabled={isSubmitting || isLoadingJob}
+          className="h-10 px-5 bg-[#00C853] hover:bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider"
+        >
+          {isSubmitting ? "Saving..." : advanceAction.label}
+        </Button>
+      );
+    }
+
+    return (
+      <div className="flex items-center gap-2">
+        <Select
+          value={advanceAction.status}
+          onValueChange={setSelectedAdvanceStatus}
+          disabled={isSubmitting || isLoadingJob}
+        >
+          <SelectTrigger className="h-10 w-[220px] max-w-[40vw] text-[10px] font-black uppercase tracking-wider">
+            <SelectValue placeholder="Choose an action" />
+          </SelectTrigger>
+          <SelectContent>
+            {advanceActions.map((action) => (
+              <SelectItem key={action.status} value={action.status}>
+                {action.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          onClick={openAdvanceConfirmation}
+          disabled={isSubmitting || isLoadingJob}
+          className="h-10 px-5 bg-[#00C853] hover:bg-emerald-600 text-white text-[10px] font-black uppercase tracking-wider"
+        >
+          {isSubmitting ? "Saving..." : "Continue"}
+        </Button>
+      </div>
+    );
   };
 
   const numericInputClass = "h-9 rounded-lg text-[12px] font-medium text-right tabular-nums";
@@ -1514,9 +1654,63 @@ const toolInputClass = (disabled: boolean) => (disabled ? autoInputClass : numer
     </div>
   );
 
+  const renderField = (f: FieldDef) => {
+    const isLocked = !readOnly && lockedKeys.includes(f.key);
+    const isWorkingDays = f.key === "totalWorkingDays";
+    const isDisabled = locked || (isLocked && !isWorkingDays);
+
+    return (
+      <div
+        key={f.key}
+        className={`space-y-1.5 ${SPAN_CLASS[f.span ?? 1]}`}
+      >
+        <Label
+          htmlFor={`fillup-${f.key}`}
+          className="mb-1.5 flex items-center gap-1.5 text-[10px] font-black uppercase text-slate-400"
+        >
+          {f.label}
+          {f.required && !readOnly && <span className="text-red-500">*</span>}
+          {isLocked && !isWorkingDays && <Lock size={9} className="text-slate-300" />}
+        </Label>
+        {f.multiline ? (
+          <Textarea
+            id={`fillup-${f.key}`}
+            value={values[f.key] ?? ""}
+            onChange={(e) => setField(f.key, e.target.value)}
+            placeholder={f.placeholder}
+            disabled={isDisabled}
+            className="min-h-[120px] rounded-xl text-[12px] font-medium disabled:opacity-100 disabled:bg-slate-50 disabled:text-slate-600 disabled:cursor-not-allowed"
+          />
+        ) : (
+          <Input
+            id={`fillup-${f.key}`}
+            value={values[f.key] ?? ""}
+            onChange={(e) => setField(f.key, isWorkingDays ? e.target.value.replace(/\D/g, "") : e.target.value)}
+            placeholder={f.placeholder}
+            disabled={isDisabled}
+            inputMode={isWorkingDays ? "numeric" : undefined}
+            className={`h-10 rounded-xl text-[12px] font-medium disabled:opacity-100 disabled:bg-slate-50 disabled:text-slate-600 disabled:cursor-not-allowed ${isWorkingDays ? "!border-emerald-300 !bg-emerald-50 !text-emerald-700 focus-visible:!ring-emerald-500" : ""}`}
+          />
+        )}
+      </div>
+    );
+  };
+  const renderFields = (keys: string[]) =>
+    FIELDS.filter((field) => keys.includes(field.key)).map(renderField);
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] !max-w-[1400px] max-h-[88vh] p-0 gap-0 overflow-hidden rounded-2xl flex flex-col">
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      <DialogContent
+        nonModalOverlay
+        onInteractOutside={(event) => {
+          if (event.composedPath().some(
+            (target) => target instanceof Element && target.matches("[data-job-request-chat]")
+          )) {
+            event.preventDefault();
+          }
+        }}
+        className="w-[95vw] !max-w-[1400px] max-h-[88vh] p-0 gap-0 overflow-hidden rounded-2xl flex flex-col"
+      >
         <DialogHeader className="px-6 py-4 border-b border-slate-100 bg-slate-50/60 shrink-0">
           <div className="flex items-center gap-3 pr-6">
             <div className="size-9 bg-slate-900 rounded-lg flex items-center justify-center text-white">
@@ -1528,7 +1722,7 @@ const toolInputClass = (disabled: boolean) => (disabled ? autoInputClass : numer
               </DialogTitle>
               <DialogDescription className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                 {readOnly
-                  ? `Saved draft${viewDraft?.createdByName ? ` by ${viewDraft.createdByName}` : ""} - view only`
+                  ? `Saved draft${viewDraft?.createdByName ? ` by ${viewDraft.createdByName}` : ""} - form view only`
                   : isLoadingJob
                   ? "Loading job request..."
                   : editDraft
@@ -1541,42 +1735,72 @@ const toolInputClass = (disabled: boolean) => (disabled ? autoInputClass : numer
 
         <div className="flex-1 overflow-y-auto px-6 pb-5 pt-0">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-5">
-            {FIELDS.map((f) => {
-              const isLocked = !readOnly && lockedKeys.includes(f.key);
-              const isDisabled = locked || isLocked;
-
-              return (
-                <div key={f.key} className={`space-y-1.5 ${SPAN_CLASS[f.span ?? 1]}`}>
-                  <Label
-                    htmlFor={`fillup-${f.key}`}
-                    className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1.5"
-                  >
-                    {f.label}
-                    {f.required && !readOnly && <span className="text-red-500">*</span>}
-                    {isLocked && <Lock size={9} className="text-slate-300" />}
-                  </Label>
-                  {f.multiline ? (
-                    <Textarea
-                      id={`fillup-${f.key}`}
-                      value={values[f.key] ?? ""}
-                      onChange={(e) => setField(f.key, e.target.value)}
-                      placeholder={f.placeholder}
-                      disabled={isDisabled}
-                      className="min-h-[120px] rounded-xl text-[12px] font-medium disabled:opacity-100 disabled:bg-slate-50 disabled:text-slate-600 disabled:cursor-not-allowed"
-                    />
-                  ) : (
+            {renderFields(["jrNumber", "projectTitle", "projectName"])}
+            {renderFields(["dateRequested", "clientName", "agentName"])}
+            {(contactDetails?.contactPerson || contactDetails?.designation || contactDetails?.email || contactDetails?.contactNumber) && (
+              <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 md:col-span-3 md:grid-cols-4">
+                {[
+                  { label: "Contact person", value: contactDetails.contactPerson },
+                  { label: "Designation", value: contactDetails.designation },
+                  { label: "Email address", value: contactDetails.email },
+                  { label: "Contact number", value: contactDetails.contactNumber },
+                ].map(({ label, value }) => (
+                  <div key={label} className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500">{label}</Label>
                     <Input
-                      id={`fillup-${f.key}`}
-                      value={values[f.key] ?? ""}
-                      onChange={(e) => setField(f.key, e.target.value)}
-                      placeholder={f.placeholder}
-                      disabled={isDisabled}
-                      className="h-10 rounded-xl text-[12px] font-medium disabled:opacity-100 disabled:bg-slate-50 disabled:text-slate-600 disabled:cursor-not-allowed"
+                      className="h-10 rounded-lg text-xs font-semibold read-only:bg-white read-only:text-slate-500"
+                      value={value ?? ""}
+                      readOnly
+                      placeholder="Not provided"
                     />
-                  )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {renderFields(["scopeOfWork"])}
+            {renderFields(["address"])}
+
+            {(preferredDateFinish?.from || preferredDateFinish?.to) && (
+              <section className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3 md:col-span-3">
+                <Label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Preferred Date Finish</Label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-semibold text-slate-500">From</Label>
+                    <Input value={formatLocalCalendarDate(preferredDateFinish.from)} readOnly className="h-10 rounded-lg bg-white text-xs font-semibold read-only:text-slate-700" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[9px] font-semibold text-slate-500">To</Label>
+                    <Input value={formatLocalCalendarDate(preferredDateFinish.to)} readOnly className="h-10 rounded-lg bg-white text-xs font-semibold read-only:text-slate-700" />
+                  </div>
                 </div>
-              );
-            })}
+              </section>
+            )}
+
+            {pdDatabaseItems.length > 0 && (
+              <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 md:col-span-3">
+                <div className="flex items-center gap-2">
+                  <ImageIcon size={14} className="text-blue-600" />
+                  <Label className="text-[10px] font-black uppercase tracking-widest text-slate-500">PD Database Items</Label>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2">
+                  {pdDatabaseItems.map((item, index) => (
+                    <div key={`${item.productId}-${index}`} className="flex min-w-0 items-center gap-3 rounded-lg border border-slate-200 p-2.5">
+                      {item.imageUrl ? (
+                        <Image src={item.imageUrl} alt={item.productName} width={56} height={56} unoptimized className="size-14 shrink-0 rounded-md border object-cover" />
+                      ) : (
+                        <div className="grid size-14 shrink-0 place-items-center rounded-md border bg-slate-50 text-[8px] font-bold text-slate-400">No image</div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[10px] font-bold text-slate-800">{item.productName}</p>
+                        <p className="text-[9px] text-blue-700">Item code: {item.itemCode || "—"}</p>
+                        <p className="text-[9px] font-semibold text-slate-600">Quantity: {item.quantity}</p>
+                        {item.description && <p className="mt-1 whitespace-pre-wrap break-words text-[9px] text-slate-600">{item.description}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* ── BILL OF QUANTITIES ── */}
             <div
@@ -1872,7 +2096,16 @@ const toolInputClass = (disabled: boolean) => (disabled ? autoInputClass : numer
                                 const procTotal = procRowTotal(procurementRow, row, workingDays, isTools, isRental);
 
                                 return (
-                                  <div key={row.id} className={`${sectionGrid} px-3 py-2`}>
+                                  <div
+                                    key={row.id}
+                                    onClick={() => setActiveBoqRowKey(`${section.id}:${row.id}`)}
+                                    onFocusCapture={() => setActiveBoqRowKey(`${section.id}:${row.id}`)}
+                                    className={`${sectionGrid} px-3 py-2 transition-shadow ${
+                                      activeBoqRowKey === `${section.id}:${row.id}`
+                                        ? "relative rounded-lg bg-cyan-50/20 ring-2 ring-inset ring-cyan-400 shadow-[0_0_16px_rgba(34,211,238,0.65)]"
+                                        : ""
+                                    }`}
+                                  >
                                     <div className={showProcurement ? `${procSticky} -my-2 py-2 items-start bg-white` : "contents"}>
                                     <div
   className={`flex flex-col items-start gap-1 pt-2 ${
@@ -2356,6 +2589,22 @@ const toolInputClass = (disabled: boolean) => (disabled ? autoInputClass : numer
               {/* ── PROJECT COST SUMMARY (all formulas) ── */}
               <div className="pt-2 space-y-3">
                 <div className="border-2 border-slate-900 rounded-md overflow-hidden">
+                  <div className="grid grid-cols-[1fr_200px] border-b border-emerald-200 bg-emerald-50">
+                    <Label htmlFor="fillup-totalWorkingDays" className="px-3 py-2 text-right text-[11px] font-black uppercase tracking-wide text-emerald-800 flex items-center justify-end">
+                      Number of Days
+                    </Label>
+                    <div className="px-3 py-1.5 border-l border-emerald-200">
+                      <Input
+                        id="fillup-totalWorkingDays"
+                        value={values.totalWorkingDays ?? ""}
+                        onChange={(e) => setField("totalWorkingDays", e.target.value.replace(/\D/g, ""))}
+                        inputMode="numeric"
+                        disabled={locked}
+                        aria-label="Number of days"
+                        className="h-8 border-emerald-300 bg-white text-right text-[13px] font-black tabular-nums text-emerald-700 focus-visible:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
                   <SummaryRow label="Material Cost">{peso(summary.materialCost)}</SummaryRow>
                   <SummaryRow label="Labor Cost">{peso(summary.laborCost)}</SummaryRow>
                   <SummaryRow label="Consumables">{peso(summary.consumables)}</SummaryRow>
@@ -2482,6 +2731,7 @@ const toolInputClass = (disabled: boolean) => (disabled ? autoInputClass : numer
               >
                 Close
               </Button>
+              {renderAdvanceControl()}
               {canEditProc && (
                 <Button
                   type="button"
@@ -2520,17 +2770,72 @@ const toolInputClass = (disabled: boolean) => (disabled ? autoInputClass : numer
                 </Button>
                 <Button
                   type="button"
-                  onClick={handleSubmit}
+                  onClick={() => setPendingConfirmation("save")}
                   disabled={isSubmitting || isLoadingJob}
                   className="h-10 px-6 gap-1.5 bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-black uppercase tracking-wider"
                 >
                   <Send size={12} />
-                  {isSubmitting ? "Saving..." : "Submit"}
+                  {isSubmitting ? "Saving..." : "Save Draft"}
                 </Button>
+                {renderAdvanceControl()}
               </div>
             </>
           )}
         </DialogFooter>
+
+        <Dialog
+          open={pendingConfirmation !== null}
+          onOpenChange={(isOpen) => {
+            if (!isOpen && !isSubmitting) setPendingConfirmation(null);
+          }}
+        >
+          <DialogContent className="w-[92vw] !max-w-[420px] rounded-2xl">
+            <DialogHeader>
+              <DialogTitle className="text-[14px] font-black uppercase tracking-tight text-slate-900">
+                Confirm {pendingConfirmation === "advance" ? "Action" : "Save Draft"}
+              </DialogTitle>
+              <DialogDescription className="text-[12px] font-medium text-slate-500">
+                {pendingConfirmation === "advance"
+                  ? `Do you want to continue with "${advanceAction?.label}"? Add your remarks to continue.`
+                  : "Do you want to save this Fill Up Form as a draft?"}
+              </DialogDescription>
+            </DialogHeader>
+            {pendingConfirmation === "advance" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="approval-remarks" className="text-[10px] font-black uppercase text-slate-400">
+                  {remarksLabel} <span className="text-red-500">*</span>
+                </Label>
+                <Textarea
+                  id="approval-remarks"
+                  value={approvalRemarks}
+                  onChange={(e) => setApprovalRemarks(e.target.value)}
+                  placeholder="Enter remarks to continue..."
+                  readOnly={!remarksEditable}
+                  className="min-h-[110px] rounded-xl text-[12px] font-medium read-only:bg-slate-50 read-only:text-slate-600"
+                />
+              </div>
+            )}
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setPendingConfirmation(null)}
+                disabled={isSubmitting}
+                className="h-10 px-5 text-[10px] font-black uppercase tracking-wider"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={confirmPendingAction}
+                disabled={isSubmitting || (pendingConfirmation === "advance" && !approvalRemarks.trim())}
+                className="h-10 px-5 bg-slate-900 hover:bg-slate-800 text-white text-[10px] font-black uppercase tracking-wider"
+              >
+                {isSubmitting ? "Saving..." : "Confirm"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* ── Import confirmation (replaces window.confirm) ── */}
         <Dialog

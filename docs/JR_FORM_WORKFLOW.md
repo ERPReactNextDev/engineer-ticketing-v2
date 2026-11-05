@@ -214,12 +214,16 @@ type FillUpDraft = {
 | jrNumber | JR Number | Yes | Yes | 1 |
 | dateRequested | Date Requested | No | Yes | 1 |
 | agentName | Agent Name | No | Yes | 1 |
-| projectTitle | Project Title | Yes | Yes | 2 |
+| projectTitle | Project Title | Yes | Yes | 1 |
+| projectName | Project / Site Name | No | Yes | 1 |
 | clientName | Client Name | No | Yes | 1 |
 | address | Address | Yes | Yes | 3 |
-| projectDuration | Project Duration | No | Yes | 1 |
-| workHours | Work Hours | No | Yes | 2 |
+| contactDetails | Contact Person, Designation, Email, Contact Number | No | Yes | 3 |
 | scopeOfWork | Detailed Scope of Work | Yes | Yes | 3 |
+
+The Detailed Scope of Work field spans the full form width below the contact-details row. Number of Days is editable in edit mode and appears as a green field immediately above Material Cost in the project cost summary; it is included in the saved form values. Read-only drafts remain non-editable.
+
+The request detail page also displays the selected PD Database items and the Preferred Date Finish range (date-only, formatted as Month Day, Year). Requests forwarded to TSM or Sales Head are omitted from this Engineering job-request list. In the Fill Up Form dialog, the Collaboration Hub can be opened and used while the form remains open.
 
 **BOQ (Bill of Quantities) Section**:
 - Contains multiple sections, each with rows of items
@@ -861,6 +865,14 @@ import { cn } from "@/lib/utils";
 - Added `data-proc-input` attribute to prevent BOQ import paste from triggering when pasting in procurement fields
 - Updated subtotal row to use inline grid cells instead of sticky wrapper (simplified layout)
 - Added `whitespace-nowrap` to Variance column to prevent text wrapping
+
+### Job Request Detail and Fill Up Form Updates (November 2026)
+- Expanded Detailed Scope of Work to the full three-column form width beneath the contact details.
+- Added the editable, green Number of Days field above Material Cost in the project cost summary. The value is carried with the Fill Up Form draft; read-only draft views remain locked.
+- Displayed PD Database item selections and Preferred Date Finish dates on the request detail page and in the Fill Up Form dialog.
+- Formatted preferred dates as Month Day, Year without displaying a time.
+- Allowed the Collaboration Hub to remain interactive while the Fill Up Form dialog is open.
+- Filtered requests already forwarded to TSM or Sales Head out of the Engineering request list.
 
 ---
 

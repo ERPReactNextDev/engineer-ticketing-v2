@@ -76,6 +76,18 @@ const FILTERS = [
     { key: "JR FORM FORWARD TO PROCUREMENT", label: "Procurement", icon: CheckCircle2, variant: "emerald" },
 ]
 
+const HIDDEN_SALES_WORKFLOW_STATUSES = new Set([
+    "JR FORM FORWARD TO TSM",
+    "JR FORM FOWARD TO TSM",
+    "JR FORM FORWARD TO SALES HEAD",
+    "JR FORM FOWARD TO SALES HEAD",
+])
+
+function isHiddenSalesWorkflowStatus(status: unknown) {
+    return typeof status === "string" &&
+        HIDDEN_SALES_WORKFLOW_STATUSES.has(status.trim().replace(/\s+/g, " ").toUpperCase())
+}
+
 function getStatusMeta(status: string) {
     const s = (status || "").toUpperCase().trim()
     return STATUS_META[s] || { label: status, color: "text-zinc-500", bg: "bg-zinc-50", border: "border-zinc-200", dot: "bg-zinc-300" }
@@ -544,14 +556,15 @@ React.useEffect(() => {
         try {
             setDataLoadError(null)
             const rows = await listJobRequests()
-            if (!rows.length) {
+            const engineeringRequests = rows.filter((row) => !isHiddenSalesWorkflowStatus(row.status))
+            if (!engineeringRequests.length) {
                 setRequests([])
                 setIsDataLoading(false)
                 return
             }
 
             if (hasGlobalAccess) {
-                setRequests(rows.map((row) => ({
+                setRequests(engineeringRequests.map((row) => ({
                     ...row,
                     fullId: String(row.id ?? ""),
                     status: (row.status || "JR FORM FORWARD TO ENGINEERING").toUpperCase(),
@@ -561,7 +574,7 @@ React.useEffect(() => {
             }
 
             const ids = Array.from(new Set([user.refId, user.id, ...subordinateIds].filter(Boolean).map(String)))
-            const visible = rows.filter((row: any) => {
+            const visible = engineeringRequests.filter((row: any) => {
                 const createdBy = String(row.createdBy || "")
                 const submittedBy = String(row.submittedBy || "")
                 return ids.includes(createdBy) || ids.includes(submittedBy)
