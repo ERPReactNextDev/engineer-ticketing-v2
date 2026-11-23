@@ -21,8 +21,17 @@ import {
     XCircle
 } from "lucide-react"
 
-import { db } from "@/lib/firebase"
-import { doc, onSnapshot, updateDoc, serverTimestamp, query, collection, where } from "firebase/firestore"
+import {
+    getAppointmentSupabaseClient,
+    normalizeAppointment,
+    getSiteVisitProtocols,
+    getSiteVisitPicOptions,
+    resolveSiteVisitPicNames,
+    SITE_VISIT_PROTOCOL_LABELS,
+    splitSiteVisitPicValues,
+    type SiteVisitPicOption,
+    type SiteVisitUser,
+} from "@/lib/appointment-supabase"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
@@ -36,6 +45,16 @@ import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/s
 import { AppSidebar } from "@/components/app-sidebar"
 import { CollaborationHub } from "@/components/collaboration-hub"
 
+function isSalesManagerRole(role: string, position: string) {
+    const normalizedRole = role.toUpperCase().trim()
+    const normalizedPosition = position.toUpperCase().trim()
+    return normalizedRole.includes("MANAGER") ||
+        normalizedRole === "SALES HEAD" ||
+        normalizedRole === "SUPER ADMIN" ||
+        normalizedPosition.includes("MANAGER") ||
+        normalizedPosition.includes("SALES HEAD")
+}
+
 export default function AppointmentDetailsPage() {
     const params = useParams() as { id: string }
     const id = params.id
@@ -44,8 +63,9 @@ export default function AppointmentDetailsPage() {
     const [loading, setLoading] = React.useState(true)
     const [data, setData] = React.useState<any>(null)
     const [submitterName, setSubmitterName] = React.useState("")
-    const [userContext, setUserContext] = React.useState({ role: "", id: "", refId: "", name: "", profilePicture: "", dept: "", userRole: "" })
+    const [userContext, setUserContext] = React.useState({ role: "", id: "", refId: "", name: "", profilePicture: "", dept: "", userRole: "", position: "" })
     const [actionLoading, setActionLoading] = React.useState(false)
+    const [hasSiteVisitAccess, setHasSiteVisitAccess] = React.useState(false)
     const [confNotes, setConfNotes] = React.useState("")
     const [cancelReason, setCancelReason] = React.useState("")
     const [showCancelForm, setShowCancelForm] = React.useState(false)
@@ -54,11 +74,33 @@ export default function AppointmentDetailsPage() {
     const [isOverdue, setIsOverdue] = React.useState(false)
     const [isDetailsCollapsed, setIsDetailsCollapsed] = React.useState(false)
     const [timeElapsed, setTimeElapsed] = React.useState("0h 0m")
-    const [availablePics, setAvailablePics] = React.useState<any[]>([])
+    const [availablePics, setAvailablePics] = React.useState<SiteVisitPicOption[]>([])
+    const [siteVisitUsers, setSiteVisitUsers] = React.useState<SiteVisitUser[]>([])
     const [protocolLabels, setProtocolLabels] = React.useState<string[]>([])
     const [selectedAssignees, setSelectedAssignees] = React.useState<string[]>([])
 
     const status = data?.status?.toUpperCase() || "PENDING"
+
+    React.useEffect(() => {
+        let isActive = true
+
+        const fetchSiteVisitUsers = async () => {
+            try {
+                const response = await fetch("/api/user")
+                if (!response.ok) throw new Error(`User lookup failed (${response.status})`)
+
+                const users = await response.json()
+                if (!Array.isArray(users)) throw new Error("User lookup returned an invalid response")
+                if (isActive) setSiteVisitUsers(users)
+            } catch (error) {
+                console.error("SITE_VISIT_PIC_USERS_ERROR", error)
+                if (isActive) toast.error("Unable to load engineer names.")
+            }
+        }
+
+        fetchSiteVisitUsers()
+        return () => { isActive = false }
+    }, [])
 
     // FETCH PROTOCOL LABELS AND AVAILABLE PICS
     React.useEffect(() => {
@@ -66,15 +108,15 @@ export default function AppointmentDetailsPage() {
 
         const fetchProtocols = async () => {
             try {
-                // FIX: One-time getDocs instead of onSnapshot — protocols don't change during a session
-                const { getDocs } = await import("firebase/firestore");
-                const q = query(collection(db, "protocols"), where("isActive", "==", true));
-                const snapshot = await getDocs(q);
-                const dbProtocols = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })) as any[];
-                    const matched = dbProtocols.filter((proto: any) => data.protocols.includes(proto.id));
+                const protocolIds = Array.isArray(data.protocols) ? data.protocols : [data.protocols];
+                const dbProtocols = await getSiteVisitProtocols(true);
+                const protocolById = new Map(dbProtocols.map((protocol) => [protocol.id, protocol]));
+                const matched = dbProtocols.filter((proto) => protocolIds.includes(proto.id));
                     
                     // Update Labels for display
-                    setProtocolLabels(matched.map(p => p.label || p.id));
+                setProtocolLabels(protocolIds.map((id: string) =>
+                    protocolById.get(id)?.label || SITE_VISIT_PROTOCOL_LABELS[id] || id
+                ));
 
                     // LOGIC: Show all PICS from ALL selected protocols, handle single string or array!
                     let finalPics: any[] = [];
@@ -82,8 +124,6 @@ export default function AppointmentDetailsPage() {
                         const picValue = p.pic;
                         if (Array.isArray(picValue)) {
                             return picValue.map((name: string) => name.trim().toUpperCase());
-                        } else if (typeof picValue === 'string') {
-                            return [picValue.trim().toUpperCase()];
                         }
                         return [];
                     })));
@@ -94,23 +134,43 @@ export default function AppointmentDetailsPage() {
                             const picValue = p.pic;
                             if (Array.isArray(picValue)) {
                                 return picValue.map((name: string) => name.trim().toUpperCase());
-                            } else if (typeof picValue === 'string') {
-                                return [picValue.trim().toUpperCase()];
                             }
                             return [];
                         })));
                     }
-                    
-                    setAvailablePics(finalPics);
+
+                    if (finalPics.length === 0) {
+                        finalPics = ["ENGINEERING_STAFF"];
+                    }
+
+                    let picOptions = getSiteVisitPicOptions(finalPics, siteVisitUsers);
+                    if (
+                        picOptions.length === 0 &&
+                        finalPics.some((pic) => pic.trim().toUpperCase() === "ENGINEERING_STAFF")
+                    ) {
+                        picOptions = siteVisitUsers
+                            .filter((user) =>
+                                user.Department?.trim().toUpperCase() === "ENGINEERING" &&
+                                user.ReferenceID &&
+                                !["RESIGNED", "TERMINATED"].includes(user.Status?.trim().toUpperCase() || "")
+                            )
+                            .map((user) => ({
+                                referenceId: user.ReferenceID?.trim() || "",
+                                name: `${user.Firstname || ""} ${user.Lastname || ""}`.trim(),
+                            }))
+                            .filter((pic) => pic.referenceId && pic.name);
+                    }
+
+                    setAvailablePics(picOptions);
             } catch (err) { console.error("PROTOCOL_SYNC_ERROR", err); }
         };
         fetchProtocols();
-    }, [data?.protocols]);
+    }, [data?.protocols, siteVisitUsers]);
 
     // PRE-FILL SELECTED ASSIGNEES IF ALREADY ASSIGNED
     React.useEffect(() => {
         if (data?.pic && data.pic !== "UNASSIGNED") {
-            const currentPics = Array.isArray(data.pic) ? data.pic : data.pic.split(", ").map((p: string) => p.trim().toUpperCase());
+            const currentPics = splitSiteVisitPicValues(data.pic);
             setSelectedAssignees(currentPics);
         }
     }, [data?.pic]);
@@ -155,7 +215,7 @@ export default function AppointmentDetailsPage() {
     }, [data, status])
 
     React.useEffect(() => {
-        let unsubscribe: () => void
+        let unsubscribe: any
         const establishUplink = async () => {
             const storedId = localStorage.getItem("userId")
             if (!storedId) return
@@ -163,23 +223,28 @@ export default function AppointmentDetailsPage() {
             try {
                 const res = await fetch(`/api/user?id=${encodeURIComponent(storedId)}`)
                 const user = await res.json()
+
+                try {
+                    const permissionResponse = await fetch(`/api/permissions/check?userId=${encodeURIComponent(storedId)}`)
+                    if (!permissionResponse.ok) {
+                        throw new Error(`Permission check failed (${permissionResponse.status})`)
+                    }
+                    const permissionData = await permissionResponse.json()
+                    setHasSiteVisitAccess(
+                        permissionData.bypass === true || permissionData.services?.siteVisit === true
+                    )
+                } catch (permissionError) {
+                    console.error("SITE_VISIT_PERMISSION_ERROR", permissionError)
+                    setHasSiteVisitAccess(false)
+                }
                 
-                // Fetch role from Firebase where the correct MANAGER role is stored
-                const { getDoc, doc } = await import("firebase/firestore")
-                const { db } = await import("@/lib/firebase")
-                const userDocRef = doc(db, "users", storedId)
-                const userDocSnap = await getDoc(userDocRef)
-                const firestoreRole = userDocSnap.exists() ? (userDocSnap.data().Role || userDocSnap.data().role || "").toUpperCase() : ""
-                
-                // DEBUG: Log all user fields
-                console.log("[DEBUG] MongoDB user data:", { Role: user.Role, RoleCode: user.RoleCode, Position: user.Position })
-                console.log("[DEBUG] Firebase user role:", firestoreRole)
+                const firestoreRole = (user.engiconnect_role || user.Role || user.role || user.Position || "").toUpperCase()
                 
                 const position = (user.Position || "").toUpperCase()
                 const roleCode = (user.RoleCode || "").toUpperCase()
                 const mongoRole = (user.Role || "").toUpperCase()
                 
-                // Use Firebase role if available (it's the correct one), otherwise fall back to MongoDB logic
+                // Prefer the Supabase role, then fall back to the profile role fields.
                 const combinedRole = firestoreRole.includes("MANAGER") || firestoreRole.includes("LEADER")
                     ? firestoreRole
                     : position.includes("MANAGER") || position.includes("LEADER") || 
@@ -195,17 +260,29 @@ export default function AppointmentDetailsPage() {
                     name: user.Firstname + " " + user.Lastname,
                     profilePicture: user.ProfilePicture || "",
                     dept: user.Department?.toLowerCase() || "",
-                    userRole: combinedRole
+                    userRole: combinedRole,
+                    position: user.Position || "",
                 })
 
-                const docRef = doc(db, "appointments", id)
-                unsubscribe = onSnapshot(docRef, async (docSnap) => {
-                    if (docSnap.exists()) {
-                        const appointmentData = docSnap.data()
+                const supabase = getAppointmentSupabaseClient()
+                const fetchAppointment = async () => {
+                    const { data: row, error } = await supabase
+                        .from("appointments")
+                        .select("*")
+                        .eq("id", id)
+                        .maybeSingle()
+
+                    if (error) {
+                        console.error("APPOINTMENT_FETCH_ERROR", error)
+                        setLoading(false)
+                        return
+                    }
+
+                    if (row) {
+                        const appointmentData = normalizeAppointment(row)
                         setData(appointmentData)
                         setConfNotes((prev) => prev || appointmentData.confirmationNotes || "")
 
-                        // FETCH SUBMITTER NAME IF ID EXISTS
                         if (appointmentData.submittedBy && appointmentData.submittedBy !== "SYSTEM") {
                             try {
                                 const subRes = await fetch(`/api/user?id=${encodeURIComponent(appointmentData.submittedBy)}`)
@@ -217,41 +294,93 @@ export default function AppointmentDetailsPage() {
                         }
                     }
                     setLoading(false)
-                })
+                }
+
+                await fetchAppointment()
+                unsubscribe = supabase
+                    .channel(`appointment-${id}`)
+                    .on("postgres_changes", {
+                        event: "*",
+                        schema: "public",
+                        table: "appointments",
+                        filter: `id=eq.${id}`,
+                    }, fetchAppointment)
+                    .subscribe()
             } catch (err) {
                 toast.error("Failed to connect to the server.")
                 setLoading(false)
             }
         }
         establishUplink()
-        return () => unsubscribe?.()
+        return () => {
+            if (typeof unsubscribe === "function") unsubscribe()
+            else unsubscribe?.unsubscribe?.()
+        }
     }, [id])
 
     const handleStatusUpdate = async (newStatus: string, additionalData = {}) => {
+        if (!hasSiteVisitAccess) {
+            toast.error("Your role does not have Site Visit permission.")
+            return
+        }
+        const department = userContext.dept.toUpperCase()
+        const isSalesManager = department === "SALES" &&
+            isSalesManagerRole(userContext.userRole, userContext.position)
+        const canUpdateTransition = newStatus.toUpperCase() === "COMPLETED"
+            ? isSalesManager
+            : (department === "ENGINEERING" || department === "IT")
+        if (!canUpdateTransition) {
+            toast.error("Your role is not authorized for this workflow step.")
+            return
+        }
         setActionLoading(true)
         const toastId = toast.loading(`Updating status to ${newStatus.toLowerCase()}...`)
         try {
-            const docRef = doc(db, "appointments", id)
-            const statusKey = `${newStatus.toLowerCase()}At`
-            const actorKey = `${newStatus.toLowerCase()}By`
+            const supabase = getAppointmentSupabaseClient()
+            const status = newStatus.toUpperCase()
+            const normalizedAdditionalData: Record<string, any> = {
+                ...additionalData,
+            }
+            if ("confirmationNotes" in normalizedAdditionalData) {
+                normalizedAdditionalData.confirmation_notes = normalizedAdditionalData.confirmationNotes
+                delete normalizedAdditionalData.confirmationNotes
+            }
 
-            await updateDoc(docRef, {
-                status: newStatus.toUpperCase(),
-                updatedAt: serverTimestamp(),
-                [statusKey]: serverTimestamp(),
-                [actorKey]: userContext.name,
-                lastModifiedBy: userContext.id,
-                ...additionalData
-            })
+            const now = new Date().toISOString()
+            const timestampFields: Record<string, { at: string; by: string }> = {
+                CONFIRMED: { at: "confirmed_at", by: "confirmed_by" },
+                COMPLETED: { at: "completed_at", by: "completed_by" },
+            }
+            const statusFields = timestampFields[status]
+            const { error } = await supabase
+                .from("appointments")
+                .update({
+                    status,
+                    updated_at: now,
+                    last_modified_by: userContext.id,
+                    ...(statusFields ? {
+                        [statusFields.at]: now,
+                        [statusFields.by]: userContext.name,
+                    } : {}),
+                    ...normalizedAdditionalData,
+                })
+                .eq("id", id)
+
+            if (error) throw error
             toast.success(`Visit successfully marked as ${newStatus.toLowerCase()}.`, { id: toastId })
         } catch (err) {
-            toast.error("Failed to update status. Please try again.", { id: toastId })
+            console.error("SITE_VISIT_STATUS_UPDATE_ERROR", err)
+            toast.error(err instanceof Error ? err.message : "Failed to update status.", { id: toastId })
         } finally {
             setActionLoading(false)
         }
     }
 
     const handleCancel = async () => {
+        if (!hasSiteVisitAccess) {
+            toast.error("Your role does not have Site Visit permission.")
+            return
+        }
         if (!cancelReason.trim()) {
             toast.error("Please provide a reason for cancellation")
             return
@@ -259,21 +388,27 @@ export default function AppointmentDetailsPage() {
         setActionLoading(true)
         const toastId = toast.loading("Cancelling request...")
         try {
-            const docRef = doc(db, "appointments", id)
-            await updateDoc(docRef, {
-                status: "CANCELLED",
-                updatedAt: serverTimestamp(),
-                cancelledAt: serverTimestamp(),
-                cancelledBy: userContext.name,
-                cancelledById: userContext.id,
-                cancelReason: cancelReason.trim(),
-                lastModifiedBy: userContext.id,
-            })
+            const supabase = getAppointmentSupabaseClient()
+            const now = new Date().toISOString()
+            const { error } = await supabase
+                .from("appointments")
+                .update({
+                    status: "CANCELLED",
+                    updated_at: now,
+                    cancelled_at: now,
+                    cancelled_by: userContext.name,
+                    cancelled_by_id: userContext.id,
+                    cancel_reason: cancelReason.trim(),
+                    last_modified_by: userContext.id,
+                })
+                .eq("id", id)
+            if (error) throw error
             toast.success("Request has been cancelled.", { id: toastId })
             setShowCancelForm(false)
             setCancelReason("")
         } catch (err) {
-            toast.error("Failed to cancel request. Please try again.", { id: toastId })
+            console.error("SITE_VISIT_CANCEL_ERROR", err)
+            toast.error(err instanceof Error ? err.message : "Failed to cancel request.", { id: toastId })
         } finally {
             setActionLoading(false)
         }
@@ -302,30 +437,15 @@ export default function AppointmentDetailsPage() {
 
     const isEngineering = userContext.role === "it" || userContext.role === "engineering"
     const isSales = userContext.role === "sales"
+    const canAcknowledge = hasSiteVisitAccess &&
+        isSales &&
+        isSalesManagerRole(userContext.userRole, userContext.position)
     const isRequestor = userContext.id === data?.submittedBy || userContext.refId === data?.submittedBy
     const isStaff = isEngineering || userContext.role === "admin"
     
-    // IT, Engineering Leader, Engineering Manager, and Super Admin can assign personnel
     const userDeptUpper = userContext.dept.toUpperCase().trim()
-    const userRoleUpper = userContext.userRole.trim()
     const isEngDept = userDeptUpper === "ENGINEERING"
-    const isManagerRole = ["LEADER", "MANAGER", "SUPER ADMIN", "ENGINEERING MANAGER", "ENGINEERING LEADER"].includes(userRoleUpper)
-    
-    const canAssignPersonnel = 
-        userDeptUpper === "IT" || 
-        (isEngDept && isManagerRole) ||
-        ["ENGINEERING MANAGER", "ENGINEERING LEADER"].includes(userRoleUpper)
-    
-    // DEBUG: Check user values
-    console.log("[DEBUG] userContext:", { 
-        dept: userContext.dept, 
-        deptUpper: userDeptUpper,
-        userRole: userContext.userRole, 
-        roleUpper: userRoleUpper,
-        isEngDept,
-        isManagerRole,
-        canAssignPersonnel 
-    })
+    const canAssignPersonnel = hasSiteVisitAccess && (userDeptUpper === "IT" || isEngDept)
 
     const isPending = status === "PENDING"
     const isConfirmed = status === "CONFIRMED"
@@ -388,6 +508,7 @@ export default function AppointmentDetailsPage() {
     const protocolDisplay = protocolLabels.length > 0 
         ? protocolLabels.join(" + ").toUpperCase() 
         : (Array.isArray(data?.protocols) ? data.protocols.join(" + ").toUpperCase() : (data?.protocols?.toUpperCase() || "NOT_DEFINED"))
+    const engineerPicDisplay = resolveSiteVisitPicNames(data?.pic, siteVisitUsers)
 
     const formatBookingDate = (ts: any) => {
         if (!ts) return "UNSCHEDULED"
@@ -482,7 +603,7 @@ export default function AppointmentDetailsPage() {
                             <div className="absolute top-1/2 left-0 w-full h-0.5 bg-slate-50 -translate-y-1/2 z-0" />
                             <div 
                                 className="absolute top-1/2 left-0 h-0.5 bg-blue-500 -translate-y-1/2 z-0 transition-all duration-1000" 
-                                style={{ width: isPending ? '0%' : isConfirmed ? '50%' : '100%' }}
+                                style={{ width: isCompleted ? '100%' : isConfirmed ? '50%' : '0%' }}
                             />
                             <div className="flex items-center justify-between w-full relative z-10">
                                 <MiniStep active={true} completed={!isPending} label="Pending" />
@@ -544,7 +665,7 @@ export default function AppointmentDetailsPage() {
                         <CompactStat label="SERVICE" value={protocolDisplay} icon={ShieldAlert} />
                         <CompactStat label="CLIENT" value={data?.client} icon={Building2} />
                         <CompactStat label="REQUESTOR" value={submitterName || data?.requestorName || "UNSPECIFIED"} icon={Fingerprint} />
-                        <CompactStat label="ENGINEER" value={data?.pic || "UNASSIGNED"} icon={User} color={!data?.pic || data?.pic === "UNASSIGNED" ? "text-slate-400" : "text-blue-600"} />
+                        <CompactStat label="ENGINEER" value={engineerPicDisplay} icon={User} color={!data?.pic || data?.pic === "UNASSIGNED" ? "text-slate-400" : "text-blue-600"} />
                         <CompactStat label="REF ID" value={data?.siteVisitNo || id.slice(-8).toUpperCase()} icon={Terminal} />
                     </section>
 
@@ -571,22 +692,23 @@ export default function AppointmentDetailsPage() {
                                                 <div className="space-y-2">
                                                     <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Select PIC(s)*</label>
                                                     <div className="grid grid-cols-1 gap-1 max-h-[120px] overflow-y-auto pr-1 scrollbar-hide">
-                                                        {availablePics.map((pic: any) => {
-                                                            const picName = (pic.name || pic).trim().toUpperCase();
-                                                            const isChecked = selectedAssignees.includes(picName);
+                                                        {availablePics.length === 0 ? (
+                                                            <p className="text-[8px] text-slate-400">No eligible users with a ReferenceID were found.</p>
+                                                        ) : availablePics.map((pic) => {
+                                                            const isChecked = selectedAssignees.includes(pic.referenceId);
                                                             return (
                                                                 <button 
-                                                                    key={picName}
+                                                                    key={pic.referenceId}
                                                                     onClick={() => {
-                                                                        if (isChecked) setSelectedAssignees(prev => prev.filter(p => p !== picName));
-                                                                        else setSelectedAssignees(prev => [...prev, picName]);
+                                                                        if (isChecked) setSelectedAssignees(prev => prev.filter(p => p !== pic.referenceId));
+                                                                        else setSelectedAssignees(prev => [...prev, pic.referenceId]);
                                                                     }}
                                                                     className={cn(
                                                                         "flex items-center justify-between w-full px-3 h-8 rounded-lg border transition-all text-left",
                                                                         isChecked ? "bg-blue-50 border-blue-200 text-blue-700 shadow-sm" : "bg-slate-50 border-slate-100 text-slate-500 hover:border-slate-200"
                                                                     )}
                                                                 >
-                                                                    <span className="text-[9px] font-black uppercase">{picName}</span>
+                                                                    <span className="text-[9px] font-black uppercase">{pic.name}</span>
                                                                     {isChecked ? <CheckCircle2 size={12} /> : <div className="size-3 rounded-full border-2 border-slate-200" />}
                                                                 </button>
                                                             );
@@ -596,11 +718,8 @@ export default function AppointmentDetailsPage() {
 
                                                 <Button
                                                     disabled={actionLoading || selectedAssignees.length === 0}
-                                                    onClick={() => handleStatusUpdate("PENDING", { 
+                                                    onClick={() => handleStatusUpdate("PENDING", {
                                                         pic: selectedAssignees.join(", "),
-                                                        assignedAt: serverTimestamp(),
-                                                        assignedBy: userContext.name,
-                                                        assignedById: userContext.id
                                                     })}
                                                     className="w-full h-9 bg-zinc-900 hover:bg-zinc-800 text-white font-black rounded-lg uppercase tracking-widest transition-all text-[9px]"
                                                 >
@@ -675,7 +794,7 @@ export default function AppointmentDetailsPage() {
                                     </div>
                                 )}
 
-                                {isPending && (isRequestor || isSales || isStaff) && (
+                                {hasSiteVisitAccess && isPending && (isRequestor || isSales || isStaff) && (
                                     <div className="bg-white border border-red-100 p-3 rounded-xl shadow-sm">
                                         {!showCancelForm ? (
                                             <button
@@ -730,7 +849,7 @@ export default function AppointmentDetailsPage() {
                                     </div>
                                 )}
 
-                                {isSales && isConfirmed && (
+                                {canAcknowledge && isConfirmed && (
                                     <div className="bg-white border border-slate-200/50 p-3 rounded-xl shadow-sm flex flex-col gap-2">
                                         <div className="flex items-center gap-2.5 w-full border-b border-slate-100 pb-2">
                                             <div className="size-8 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-md">
@@ -801,8 +920,8 @@ export default function AppointmentDetailsPage() {
                                     <TimelineItem label="Created" time={data?.createdAt} status="done" desc="Pending Request submitted" />
                                     <TimelineItem 
                                         label="In Progress" 
-                                        time={data?.confirmedAt} 
-                                        status={isConfirmed ? "current" : isCompleted ? "done" : "pending"} 
+                                        time={data?.confirmedAt}
+                                        status={isConfirmed ? "current" : isCompleted ? "done" : "pending"}
                                         desc={isConfirmed ? "Request Completed - awaiting approval" : "Engineer to submit report"}
                                         dept={isConfirmed ? "SALES MGMT" : isPending ? "ENGINEERING" : undefined}
                                     />
@@ -844,7 +963,7 @@ export default function AppointmentDetailsPage() {
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
                                                 <ManifestItem label="Date" value={formatBookingDate(data.appointmentDate)} icon={Calendar} isHighlight />
                                                 <ManifestItem label="Support Category" value={protocolDisplay} icon={Wrench} />
-                                                <ManifestItem label="Engineer PIC" value={data.pic} icon={User} />
+                                                <ManifestItem label="Engineer PIC" value={engineerPicDisplay} icon={User} />
                                             </div>
                                         </div>
 

@@ -50,9 +50,13 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 
-// FIREBASE
-import { db } from "@/lib/firebase"
-import { collection, onSnapshot, query, orderBy, where, getDoc, getDocs, doc } from "firebase/firestore"
+import {
+  getAppointmentSupabaseClient,
+  normalizeAppointment,
+  getSiteVisitProtocols,
+  resolveSiteVisitPicNames,
+  SITE_VISIT_PROTOCOL_LABELS,
+} from "@/lib/appointment-supabase"
 
 // CUSTOM COMPONENTS
 import { PageHeader } from "@/components/page-header"
@@ -476,7 +480,7 @@ export default function SiteVisitListPage() {
   const [searchQuery, setSearchQuery] = React.useState("")
   const [staffNames, setStaffNames] = React.useState<Record<string, string>>({})
   const [allStaff, setAllStaff] = React.useState<any[]>([])
-  const [allProtocols, setAllProtocols] = React.useState<Record<string, string>>({})
+  const [allProtocols, setAllProtocols] = React.useState<Record<string, string>>(SITE_VISIT_PROTOCOL_LABELS)
   
   // Helper to resolve protocol ID to name
   const resolveProtocolNames = React.useCallback((protocolIds: string[] | string): string => {
@@ -521,9 +525,7 @@ export default function SiteVisitListPage() {
         const res = await fetch(`/api/user?id=${encodeURIComponent(storedId)}`)
         const data = await res.json()
         
-        // Get role from firestore for accuracy
-        const userDoc = await getDoc(doc(db, "users", storedId))
-        const firestoreRole = (userDoc.exists() ? (userDoc.data().Role || userDoc.data().role || "MEMBER") : "MEMBER").toUpperCase()
+        const firestoreRole = (data.Role || data.role || data.Position || "MEMBER").toUpperCase()
 
         const name = `${data.Firstname || ""} ${data.Lastname || ""}`.trim()
         const referenceId = (data.ReferenceID || "").toUpperCase()
@@ -655,14 +657,10 @@ export default function SiteVisitListPage() {
     // Fetch protocols from Firestore for ID to name resolution
     const fetchProtocols = async () => {
       try {
-        // FIX: Add limit — protocols is a small admin collection but cap it anyway
-        const { limit: fsLimit } = await import("firebase/firestore");
-        const protocolsRef = collection(db, 'protocols')
-        const protocolsSnap = await getDocs(query(protocolsRef, fsLimit(100)))
-        const protocolsMap: Record<string, string> = {}
-        protocolsSnap.docs.forEach(doc => {
-          const data = doc.data()
-          protocolsMap[doc.id] = data.label || data.name || data.protocolName || doc.id
+        const protocolsMap: Record<string, string> = { ...SITE_VISIT_PROTOCOL_LABELS }
+        const protocols = await getSiteVisitProtocols()
+        protocols.forEach((protocol) => {
+          protocolsMap[protocol.id] = protocol.label || protocol.id
         })
         console.log('[Protocols] Loaded:', Object.keys(protocolsMap).length, 'protocols')
         console.log('[Protocols] Sample:', Object.entries(protocolsMap).slice(0, 3))
@@ -677,34 +675,45 @@ export default function SiteVisitListPage() {
     if (isUserLoading || !user.id) return;
 
     setIsDataLoading(true)
-    const baseCollection = collection(db, "appointments")
-
     const userDept = user.dept.toUpperCase();
     const userRole = user.role.toUpperCase();
     const hasGlobalAccess = userDept === "IT" || userDept === "ENGINEERING" || ["SUPER ADMIN", "LEADER"].includes(userRole);
     const isTSM = userRole === "TSM" || userRole.includes("TERRITORY SALES MANAGER");
     const isManager = userRole === "MANAGER";
 
-    // FIX: Apply server-side where filter for non-admin users
-    let q;
     const ownSubmitterIds = [user.id, user.refId].filter(Boolean) as string[];
     const teamSubmitterIds = Array.from(new Set([
       ...ownSubmitterIds,
       ...subordinateIds,
       ...subordinateReferenceIds
     ].filter(Boolean))).slice(0, 30);
-    if (hasGlobalAccess) {
-      q = query(baseCollection, orderBy("createdAt", "desc"));
-    } else if ((isTSM || isManager) && (subordinateIds.length > 0 || subordinateReferenceIds.length > 0)) {
-      q = query(baseCollection, where("submittedBy", "in", teamSubmitterIds), orderBy("createdAt", "desc"));
-    } else {
-      q = query(baseCollection, where("submittedBy", "in", ownSubmitterIds), orderBy("createdAt", "desc"));
-    }
 
-    const unsubscribe = onSnapshot(q, (snapshot: any) => {
-      let liveData = snapshot.docs.map((doc: any) => {
-        const data = doc.data()
-        const rawDate = data.appointmentDate?.toDate ? data.appointmentDate.toDate() : new Date()
+    const supabase = getAppointmentSupabaseClient();
+
+    const fetchAppointments = async () => {
+      let request = supabase
+        .from("appointments")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (!hasGlobalAccess) {
+        if ((isTSM || isManager) && teamSubmitterIds.length > 0) {
+          request = request.in("submitted_by", teamSubmitterIds);
+        } else if (ownSubmitterIds.length > 0) {
+          request = request.in("submitted_by", ownSubmitterIds);
+        }
+      }
+
+      const { data, error } = await request;
+      if (error) {
+        console.error("Supabase appointments sync error:", error);
+        setIsDataLoading(false);
+        return;
+      }
+
+      let liveData = (data || []).map((row: any) => {
+        const data = normalizeAppointment(row)
+        const rawDate = data.appointmentDate?.toDate ? data.appointmentDate.toDate() : new Date(data.appointment_date || data.appointmentDate)
         
         // Look up TSA in allStaff to get their details including TSM and Manager
         const tsaUser = allStaff.find(u => u._id === data.submittedBy || u.UserId === data.submittedBy || u.id === data.submittedBy || u.ReferenceID === data.submittedBy)
@@ -727,13 +736,13 @@ export default function SiteVisitListPage() {
         const managerName = managerUser ? `${managerUser.Firstname || ""} ${managerUser.Lastname || ""}`.trim() : (validManagerRef || null)
         
         return {
-          id: doc.id.slice(-6).toUpperCase(),
-          fullId: doc.id,
+          id: String(data.id).slice(-6).toUpperCase(),
+          fullId: data.id,
           ...data,
           site: data.client || "Client Not Specified",
           date: rawDate.toLocaleDateString('en-CA'), 
           status: data.status?.toUpperCase() || "PENDING",
-          tech: data.pic || "UNASSIGNED",
+          tech: resolveSiteVisitPicNames(data.pic, allStaff),
           rawProtocols: data.protocols,
           type: resolveProtocolNames(data.protocols),
           submittedBy: data.submittedBy,
@@ -766,13 +775,18 @@ export default function SiteVisitListPage() {
       
       setVisits(liveData)
       setIsDataLoading(false)
-    }, (error) => {
-      console.error("Firestore Sync Error:", error)
-      setIsDataLoading(false)
-    })
+    }
 
-    return () => unsubscribe()
-  }, [user, isUserLoading, subordinateIds, subordinateReferenceIds])
+    fetchAppointments()
+    const channel = supabase
+      .channel("site-visits-list")
+      .on("postgres_changes", { event: "*", schema: "public", table: "appointments" }, fetchAppointments)
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [user, isUserLoading, subordinateIds, subordinateReferenceIds, allStaff])
 
   const filteredVisits = React.useMemo(() => {
     return visits.filter((v: any) => {

@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { ChevronLeft, PanelLeft } from "lucide-react"
+import { ChevronLeft } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface PageHeaderProps {
@@ -30,9 +30,9 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        "sticky top-0 z-50 flex h-14 md:h-16 shrink-0 items-center",
-        "border-b border-zinc-200 bg-white",
-        "px-3 md:px-6 justify-between shadow-xl transition-all duration-200",
+        "sticky top-0 z-[100] flex h-14 md:h-16 w-full max-w-full shrink-0 self-start items-center",
+        "border-b border-zinc-200 bg-white/95 backdrop-blur-md",
+        "px-3 md:px-6 justify-between shadow-sm transition-all duration-200",
         className
       )}
     >

@@ -1357,7 +1357,7 @@ export default function ProcurementDetailPage() {
 
 
             {/* ── HEADER CARD ── */}
-            <div className="sticky top-2 z-40 bg-white rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
+            <div className="sticky top-14 md:top-16 z-[40] bg-white/95 backdrop-blur-md rounded-[24px] border border-zinc-200/60 shadow-sm overflow-hidden">
               {/* Top accent bar */}
               <div className={cn(
                 "h-1 w-full",

@@ -2,6 +2,7 @@ create table if not exists public.boq_draft (
   request_id text primary key,
   form_values jsonb not null default '{}'::jsonb,
   boq_sections jsonb not null default '[]'::jsonb,
+  boqs jsonb not null default '[]'::jsonb,
   summary jsonb not null default '{}'::jsonb,
   procurement jsonb,
   status text not null default 'draft'
@@ -14,6 +15,9 @@ create table if not exists public.boq_draft (
   completed_at timestamptz,
   completed_by text
 );
+
+alter table public.boq_draft
+  add column if not exists boqs jsonb not null default '[]'::jsonb;
 
 create index if not exists boq_draft_status_updated_at_idx
   on public.boq_draft (status, updated_at desc);

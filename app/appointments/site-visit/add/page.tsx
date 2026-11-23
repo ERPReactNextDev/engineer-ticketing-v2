@@ -52,9 +52,7 @@ const getIconForProtocol = (label: string) => {
 }
 import { cn } from "@/lib/utils"
 
-// FIREBASE IMPORTS
-import { db } from "@/lib/firebase"
-import { collection, query, where } from "firebase/firestore"
+import { getSiteVisitProtocols } from "@/lib/appointment-supabase"
 
 // Shadcn UI Imports
 import { Button } from "@/components/ui/button"
@@ -109,24 +107,20 @@ export default function SalesAddAppointmentPage() {
     setList(list.includes(value) ? list.filter(i => i !== value) : [...list, value]);
   };
 
-  // 1. SYNC PROTOCOL OPTIONS FROM FIREBASE — one-time read, not a persistent listener
-  // Protocols rarely change; a getDocs is sufficient and saves quota vs onSnapshot.
+  // 1. SYNC PROTOCOL OPTIONS FROM SUPABASE
   React.useEffect(() => {
     const fetchProtocols = async () => {
       try {
-        const { getDocs } = await import("firebase/firestore");
-        const q = query(collection(db, "protocols"), where("isActive", "==", true));
-        const snapshot = await getDocs(q);
-        const fetchedOptions = snapshot.docs.map(doc => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            label: data.label,
-            desc: data.desc,
-            missionObjectives: data.description || data.missionObjectives,
-            hasPic: Array.isArray(data.pic) ? data.pic.length > 0 : !!data.pic
-          };
-        });
+        const protocols = await getSiteVisitProtocols(true);
+        const fetchedOptions = protocols
+          .filter((protocol) => protocol.isActive)
+          .map((protocol) => ({
+            id: protocol.id,
+            label: protocol.label,
+            desc: protocol.desc,
+            missionObjectives: protocol.missionObjectives,
+            hasPic: Array.isArray(protocol.pic) ? protocol.pic.length > 0 : !!protocol.pic,
+          }));
         
         const hasOthersInDb = fetchedOptions.some(opt => opt.label.toLowerCase() === "others");
         if (!hasOthersInDb) {

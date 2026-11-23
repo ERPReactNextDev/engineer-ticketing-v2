@@ -2,6 +2,7 @@ import { getJobRequestSupabaseClient } from "@/lib/job-request-supabase";
 import type {
   BoqSection,
   BoqSummary,
+  BoqVersion,
   JobFillUpFormValues,
   ProcurementData,
 } from "@/components/job-fill-up-form-dialog";
@@ -23,6 +24,7 @@ export type BoqDraft = {
   values: JobFillUpFormValues;
   boqSections: BoqSection[];
   summary: BoqSummary;
+  boqs?: BoqVersion[];
   procurement?: ProcurementData;
   status?: string;
   createdBy?: string;
@@ -39,6 +41,7 @@ type BoqDraftRow = {
   form_values: JobFillUpFormValues;
   boq_sections: BoqSection[];
   summary: BoqSummary;
+  boqs: BoqVersion[] | null;
   procurement: ProcurementData | null;
   status: string;
   created_by: string | null;
@@ -64,6 +67,7 @@ function toBoqDraft(row: BoqDraftRow): BoqDraft {
     values: row.form_values,
     boqSections: row.boq_sections,
     summary: row.summary,
+    boqs: row.boqs ?? undefined,
     procurement: row.procurement ?? undefined,
     status: row.status,
     createdBy: row.created_by ?? undefined,
@@ -112,6 +116,7 @@ export async function saveBoqDraft(
     values: changes.values ?? existing?.values ?? {},
     boqSections: changes.boqSections ?? existing?.boqSections ?? [],
     summary: changes.summary ?? existing?.summary ?? EMPTY_SUMMARY,
+    boqs: changes.boqs ?? existing?.boqs ?? [],
     procurement: changes.procurement ?? existing?.procurement,
     status: changes.status ?? existing?.status ?? "draft",
     createdBy: changes.createdBy ?? existing?.createdBy,
@@ -128,6 +133,7 @@ export async function saveBoqDraft(
     form_values: draft.values,
     boq_sections: draft.boqSections,
     summary: draft.summary,
+    boqs: draft.boqs ?? [],
     procurement: draft.procurement ?? null,
     status: draft.status,
     created_by: draft.createdBy ?? null,

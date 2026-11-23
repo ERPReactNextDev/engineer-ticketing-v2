@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 
 import { db } from "@/lib/firebase";
-import { collection, query, where, onSnapshot, limit, orderBy, doc, getDoc, getDocs } from "firebase/firestore";
+import { collection, query, where, onSnapshot, limit, orderBy, getDocs } from "firebase/firestore";
 import { cn } from "@/lib/utils";
 import { conxStorage } from "@/utils/storage-helper";
 
@@ -56,6 +56,7 @@ import { FloatingActionButton } from "@/components/floating-action-button";
 import { DashboardGuide } from "@/components/dashboard-guide";
 import { EnhancedNotifications } from "@/components/enhanced-notifications";
 import { needsJobRequestAttention } from "@/lib/job-request-notifications";
+import { listJobRequests } from "@/lib/job-request-supabase";
 
 /* ─────────────────────────────────────────────
    CUSTOM ICON
@@ -1059,13 +1060,12 @@ function EngiconnectDashboardContent() {
         fetch(`/api/user?id=${encodeURIComponent(finalUserId)}`)
             .then(res => res.json())
             .then(async mongoData => {
-                const dept = mongoData.Department || mongoData.department || ""
-                const position = (mongoData.Position || "").toUpperCase()
-                const userDoc = await getDoc(doc(db, "users", finalUserId))
-                const firestoreRole = (userDoc.exists() ? (userDoc.data().Role || userDoc.data().role || "MEMBER") : "MEMBER").toUpperCase()
-                const primaryRole = (mongoData.engiconnect_role || mongoData.Role || firestoreRole).toUpperCase().trim()
-                const isSalesDept = dept === "SALES"
-                const isAdminDept = dept === "ADMIN"
+                const dept = String(mongoData.Department || mongoData.department || "").trim()
+                const deptUpper = dept.toUpperCase()
+                const position = String(mongoData.Position || "").toUpperCase()
+                const primaryRole = String(mongoData.engiconnect_role || mongoData.Role || mongoData.role || "MEMBER").toUpperCase().trim()
+                const isSalesDept = deptUpper === "SALES"
+                const isAdminDept = deptUpper === "ADMIN"
                 const isManager = primaryRole === "MANAGER" || primaryRole === "SALES HEAD" || (isSalesDept && (position === "MANAGER" || position === "SALES HEAD" || position.includes("GENERAL MANAGER"))) || (isAdminDept && position.includes("MANAGER"))
                 const isTSM = primaryRole === "TSM" || primaryRole === "TERRITORY SALES MANAGER" || (isSalesDept && position.includes("TERRITORY SALES MANAGER"))
                 const isTSA = isSalesDept && position.includes("TERRITORY SALES ASSOCIATE")
@@ -1074,26 +1074,32 @@ function EngiconnectDashboardContent() {
                 const finalRole = isManager ? "MANAGER" : isTSM ? "TSM" : ((isSalesDept || isAdminDept) && position ? position : primaryRole)
                 const permissionRole = ((isSalesDept || isAdminDept) && position && !position.includes("MEMBER")) ? position : primaryRole
                 setUserDetails({ Firstname: mongoData.Firstname || "User", Position: mongoData.Position || "Member", Department: dept, profilePicture: mongoData.profilePicture || "" })
-                setUserDept(dept); setUserRole(finalRole)
+                setUserDept(deptUpper); setUserRole(finalRole)
                 // Set default dashboard tab based on department
-                const deptUpper = (dept || "").toUpperCase()
                 if (deptUpper === "ADMIN") setActiveTab("Overview")
                 else if (deptUpper === "PROCUREMENT" || deptUpper === "WAREHOUSE OPERATIONS") setActiveTab("Product Requests")
                 conxStorage.setItem("userDepartment", dept); conxStorage.setItem("engiconnect_role", permissionRole); conxStorage.setItem("userRole", finalRole); conxStorage.setItem("userName", mongoData.Firstname || "User")
-                const permissionId = `${(dept || "").toUpperCase().trim()}_${permissionRole.toUpperCase().trim()}`
+                const permissionId = `${deptUpper}_${permissionRole.toUpperCase().trim()}`
                 try {
                     const permission = await fetchFromAPI(`/api/permissions/role?docId=${encodeURIComponent(permissionId)}`)
-                    setPerms(permission)
-                } catch {
-                    try {
-                        const allPermissions = await fetchFromAPI("/api/permissions/role")
-                        const permission = Array.isArray(allPermissions)
-                            ? allPermissions.find((item: any) => typeof item.doc_id === "string" && item.doc_id.endsWith(`_${permissionRole.toUpperCase().trim()}`))
-                            : null
-                        setPerms(permission || null)
-                    } catch {
-                        setPerms(null)
+                    const parseSection = (value: unknown): Record<string, boolean> => {
+                        let parsed = value
+                        if (typeof parsed === "string") {
+                            try {
+                                parsed = JSON.parse(parsed)
+                            } catch {
+                                return {}
+                            }
+                        }
+                        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+                        return Object.fromEntries(
+                            Object.entries(parsed).filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean")
+                        )
                     }
+                    setPerms(permission ? { ...permission, services: parseSection(permission.services) } : null)
+                } catch (error) {
+                    console.error(`Failed to load permissions for ${permissionId}:`, error)
+                    setPerms(null)
                 }
                 if (isTSM || isManager) {
                     const usersRes = await fetch('/api/user')
@@ -1157,6 +1163,71 @@ function EngiconnectDashboardContent() {
     }, [])
 
     useEffect(() => {
+        if (!userId) return
+
+        let isActive = true
+        const loadJobRequestNotifications = async () => {
+            try {
+                const rows = await listJobRequests()
+                if (!isActive) return
+
+                const dept = (userDept || "").toUpperCase()
+                const role = (userRole || "").toUpperCase()
+                const isTSM = role === "TSM" || role === "TERRITORY SALES MANAGER"
+                const hasGlobalAccess =
+                    dept === "IT" ||
+                    dept === "ENGINEERING" ||
+                    dept === "PROCUREMENT" ||
+                    ["SUPER ADMIN", "MANAGER", "LEADER"].includes(role)
+                const visibleRows = rows.filter(row => {
+                    if (hasGlobalAccess) return true
+                    const visibleIds = isTSM ? [userId, ...subordinateIds] : [userId]
+                    return [row.submittedBy, row.createdBy]
+                        .some(submitterId => submitterId != null && visibleIds.includes(String(submitterId)))
+                })
+                const pendingRows = visibleRows.filter(row => {
+                    const status = String(row.status || "").toUpperCase().trim()
+                    const viewedBy = row.viewedStatusByUser
+                    const viewedStatus = viewedBy && typeof viewedBy === "object" && !Array.isArray(viewedBy)
+                        ? (viewedBy as Record<string, unknown>)[userId]
+                        : undefined
+                    return needsJobRequestAttention(status, dept, role) && viewedStatus !== status
+                })
+                const unread = visibleRows.reduce((total, row) => {
+                    if (!Array.isArray(row.messages)) return total
+                    return total + row.messages.filter(message => {
+                        if (!message || typeof message !== "object") return false
+                        const item = message as { senderId?: unknown; seenBy?: unknown }
+                        return item.senderId !== userId &&
+                            (!Array.isArray(item.seenBy) || !item.seenBy.includes(userId))
+                    }).length
+                }, 0)
+
+                setNotifications(prev => ({
+                    ...prev,
+                    jobRequest: pendingRows.length,
+                    unreadByService: { ...prev.unreadByService, jobRequest: unread },
+                }))
+                setMyTasks(prev => ({
+                    ...prev,
+                    jobRequests: visibleRows.filter(row =>
+                        row.assignedTo === userId && String(row.status || "").toUpperCase() !== "COMPLETED"
+                    ),
+                }))
+            } catch (error) {
+                console.error("Failed to load Job Request notifications from Supabase:", error)
+            }
+        }
+
+        void loadJobRequestNotifications()
+        const refreshInterval = setInterval(loadJobRequestNotifications, 30000)
+        return () => {
+            isActive = false
+            clearInterval(refreshInterval)
+        }
+    }, [userId, subordinateIds, userDept, userRole])
+
+    useEffect(() => {
         if (!db || !userId) return
         const userRole = conxStorage.getItem("userRole")?.toUpperCase() || "MEMBER"
         const userDept = conxStorage.getItem("userDepartment")?.toUpperCase() || ""
@@ -1213,24 +1284,6 @@ function EngiconnectDashboardContent() {
             }).length
             const unread = calculateUnread(docs, userId)
             setNotifications(prev => ({ ...prev, shopDrawing: pending, unreadByService: { ...prev.unreadByService, shopDrawing: unread } }))
-        })
-
-        const hasJobRequestAccess = hasGlobalAccess || userDept === "PROCUREMENT"
-        const jobQuery = hasJobRequestAccess
-            ? query(collection(db, "job_requests"), where("status", "not-in", ["COMPLETED", "CANCELLED", "DONE"]))
-            : isTSM
-                ? query(collection(db, "job_requests"), where("submittedBy", "in", [userId, ...subordinateIds.slice(0, 9)]))
-                : query(collection(db, "job_requests"), where("submittedBy", "==", userId))
-
-        const unsubJob = onSnapshot(jobQuery, snap => {
-            const docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
-            const pending = docs.filter((d: any) => {
-                const s = (d.status || "").toUpperCase(); if (["COMPLETED", "CANCELLED", "DONE"].includes(s)) return false
-                return needsJobRequestAttention(s, userDept, userRole) && d.viewedStatusByUser?.[userId] !== s
-            }).length
-            const unread = calculateUnread(docs, userId)
-            setNotifications(prev => ({ ...prev, jobRequest: pending, unreadByService: { ...prev.unreadByService, jobRequest: unread } }))
-            setMyTasks(prev => ({ ...prev, jobRequests: docs.filter((d: any) => d.assignedTo === userId && d.status !== "COMPLETED") }))
         })
 
         const otherQuery = hasGlobalAccess
@@ -1310,7 +1363,15 @@ function EngiconnectDashboardContent() {
         }
         let meetingRoomUnsub: (() => void) | undefined
         setupMeetingRoomListener().then(u => { meetingRoomUnsub = u })
-        return () => { unsubSite(); unsubShop(); unsubTesting(); unsubJob(); unsubOther(); unsubDialux(); supabase.removeChannel(ch); if (meetingRoomUnsub) meetingRoomUnsub() }
+        return () => {
+            unsubSite()
+            unsubShop()
+            unsubTesting()
+            unsubOther()
+            unsubDialux()
+            supabase.removeChannel(ch)
+            if (meetingRoomUnsub) meetingRoomUnsub()
+        }
     }, [userId, subordinateIds, userDept, userRole])
 
     useEffect(() => {
@@ -1333,18 +1394,73 @@ function EngiconnectDashboardContent() {
             return query(collection(db, collName), where("submittedBy", "==", userId), orderBy("createdAt", "desc"), limit(10))
         }
 
-        const activitiesMap = new Map()
-        function updateActivity(type: string, docs: any[]) {
-            docs.forEach(doc => { const data = doc.data(); activitiesMap.set(doc.id, { id: doc.id, type, ...data }) })
-            const sorted = Array.from(activitiesMap.values()).sort((a, b) => { const timeA = a.createdAt?.toMillis?.() || a.arrivalDate?.toMillis?.() || 0; const timeB = b.createdAt?.toMillis?.() || b.arrivalDate?.toMillis?.() || 0; return timeB - timeA }).slice(0, 5)
+        type DashboardActivity = {
+            id: string
+            type: string
+            createdAt?: unknown
+            arrivalDate?: unknown
+            [key: string]: unknown
+        }
+        const activitiesMap = new Map<string, DashboardActivity>()
+        let isActive = true
+        const publishActivities = () => {
+            const getTime = (value: unknown): number => {
+                if (value instanceof Date) return value.getTime()
+                if (typeof value === "string") return Date.parse(value) || 0
+                if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") {
+                    return value.toMillis()
+                }
+                return 0
+            }
+            const sorted = Array.from(activitiesMap.values()).sort((a, b) => {
+                const timeA = getTime(a.createdAt) || getTime(a.arrivalDate)
+                const timeB = getTime(b.createdAt) || getTime(b.arrivalDate)
+                return timeB - timeA
+            }).slice(0, 5)
             setRecentActivity(sorted)
         }
+        function updateActivity(type: string, docs: { id: string; data: () => Record<string, unknown> }[]) {
+            docs.forEach(document => { const data = document.data(); activitiesMap.set(document.id, { id: document.id, type, ...data }) })
+            publishActivities()
+        }
+        const loadJobRequestActivity = async () => {
+            try {
+                const rows = await listJobRequests()
+                if (!isActive) return
+                const canViewAllJobRequests =
+                    userDeptUpper === "IT" ||
+                    userDeptUpper === "ENGINEERING" ||
+                    userDeptUpper === "PROCUREMENT" ||
+                    ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRoleUpper)
+                const visibleRows = rows.filter(row => {
+                    if (canViewAllJobRequests) return true
+                    const visibleIds = isTSM ? [userId, ...subordinateIds] : [userId]
+                    return [row.submittedBy, row.createdBy]
+                        .some(submitterId => submitterId != null && visibleIds.includes(String(submitterId)))
+                })
+                visibleRows.forEach(row => {
+                    if (!row.id) return
+                    activitiesMap.set(String(row.id), { id: row.id, type: "Job", ...row })
+                })
+                publishActivities()
+            } catch (error) {
+                console.error("Failed to load Job Request activity from Supabase:", error)
+            }
+        }
         const unsubDialux = onSnapshot(makeActivityQuery("dialux_requests"), snap => updateActivity("DIAlux", snap.docs))
-        const unsubJob = onSnapshot(makeActivityQuery("job_requests"), snap => updateActivity("Job", snap.docs))
         const unsubShop = onSnapshot(makeActivityQuery("shop_drawing_requests"), snap => updateActivity("Shop", snap.docs))
         const unsubSite = onSnapshot(makeActivityQuery("appointments"), snap => updateActivity("Site Visit", snap.docs))
         const unsubTesting = onSnapshot(makeActivityQuery("testing_tracker"), snap => updateActivity("Testing", snap.docs))
-        return () => { unsubDialux(); unsubJob(); unsubShop(); unsubSite(); unsubTesting() }
+        void loadJobRequestActivity()
+        const jobActivityRefreshInterval = setInterval(loadJobRequestActivity, 30000)
+        return () => {
+            isActive = false
+            clearInterval(jobActivityRefreshInterval)
+            unsubDialux()
+            unsubShop()
+            unsubSite()
+            unsubTesting()
+        }
     }, [userId, userRole, userDept, subordinateIds])
 
     // FIX: Schedule data — reuse filtered queries, add limit to avoid full collection scans

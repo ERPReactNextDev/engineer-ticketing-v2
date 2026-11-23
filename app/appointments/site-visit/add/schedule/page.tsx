@@ -22,9 +22,15 @@ import { format } from "date-fns"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useDebounce } from "@/hooks/use-debounce"
 
-// FIREBASE IMPORTS
-import { db } from "@/lib/firebase"
-import { collection, addDoc, onSnapshot, query, where, serverTimestamp, Timestamp, getDocs } from "firebase/firestore"
+import {
+  getAppointmentSupabaseClient,
+  toSupabaseTimestamp,
+  getSiteVisitProtocols,
+  getSiteVisitPicOptions,
+  siteVisitPicMatches,
+  type SiteVisitPicOption,
+  type SiteVisitUser,
+} from "@/lib/appointment-supabase"
 
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -200,7 +206,7 @@ export default function SchedulePage() {
   const [selectedDate, setSelectedDate] = React.useState<number | null>(null);
   const [viewingDetails, setViewingDetails] = React.useState<any | null>(null);
   
-  const [assignedPics, setAssignedPics] = React.useState<any[]>([]);
+  const [assignedPics, setAssignedPics] = React.useState<SiteVisitPicOption[]>([]);
   const [protocolMetadata, setProtocolMetadata] = React.useState<any[]>([]); 
   const [selectedPic, setSelectedPic] = React.useState<string>("UNASSIGNED"); 
   const [isLoadingSync, setIsLoadingSync] = React.useState(true);
@@ -326,17 +332,14 @@ export default function SchedulePage() {
   React.useEffect(() => {
     const fetchAddresses = async () => {
       try {
-        // FIX: Use limit() to avoid reading the entire appointments collection
-        const { limit: fsLimit } = await import("firebase/firestore");
-        const q = query(
-          collection(db, "appointments"),
-          where("department", "==", "ENGINEERING"),
-          fsLimit(100)
-        );
-        const snap = await getDocs(q);
-        const addresses = Array.from(
-          new Set(snap.docs.map(doc => doc.data().address))
-        ).filter(Boolean) as string[];
+        const supabase = getAppointmentSupabaseClient();
+        const { data, error } = await supabase
+          .from("appointments")
+          .select("address")
+          .eq("department", "ENGINEERING")
+          .limit(100);
+        if (error) throw error;
+        const addresses = Array.from(new Set((data || []).map(row => row.address))).filter(Boolean) as string[];
         setAddressOptions(addresses);
       } catch (err) { console.error(err); }
     };
@@ -353,9 +356,15 @@ export default function SchedulePage() {
       return;
     }
 
-    const q = query(collection(db, "protocols"), where("isActive", "==", true));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const dbProtocols = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as any[];
+    const fetchProtocols = async () => {
+      const [dbProtocols, usersResponse] = await Promise.all([
+        getSiteVisitProtocols(true),
+        fetch("/api/user"),
+      ]);
+      if (!usersResponse.ok) throw new Error(`Engineer lookup failed (${usersResponse.status})`);
+      const users: SiteVisitUser[] = await usersResponse.json();
+      if (!Array.isArray(users)) throw new Error("Engineer lookup returned an invalid response");
+
       const matched = dbProtocols.filter((proto: any) => activeProtocols.includes(proto.id));
       setProtocolMetadata(matched);
       
@@ -369,11 +378,34 @@ export default function SchedulePage() {
         finalPics = Array.from(new Set(matched.flatMap(p => p.pic || []).map((name: string) => name.trim().toUpperCase())));
       }
 
-      setAssignedPics(finalPics.length > 0 ? finalPics : ["ENGINEERING_STAFF"]);
+      if (finalPics.length === 0) finalPics = ["ENGINEERING_STAFF"];
+
+      let picOptions = getSiteVisitPicOptions(finalPics, users);
+      if (
+        picOptions.length === 0 &&
+        finalPics.some((pic) => pic.trim().toUpperCase() === "ENGINEERING_STAFF")
+      ) {
+        picOptions = users
+          .filter((user) =>
+            user.Department?.trim().toUpperCase() === "ENGINEERING" &&
+            user.ReferenceID &&
+            !["RESIGNED", "TERMINATED"].includes(user.Status?.trim().toUpperCase() || "")
+          )
+          .map((user) => ({
+            referenceId: user.ReferenceID?.trim() || "",
+            name: `${user.Firstname || ""} ${user.Lastname || ""}`.trim(),
+          }))
+          .filter((pic) => pic.referenceId && pic.name);
+      }
+
+      setAssignedPics(picOptions);
       
       setIsLoadingSync(false);
+    };
+    fetchProtocols().catch((error) => {
+      console.error("PROTOCOL_SYNC_ERROR", error);
+      setIsLoadingSync(false);
     });
-    return () => unsubscribe();
   }, [selectedAssistance, isHydrated]);
 
   // 3. CALENDAR DATA — only subscribe when we have PICs and a valid month
@@ -386,36 +418,48 @@ export default function SchedulePage() {
     const startOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1, 0, 0, 0);
     const endOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0, 23, 59, 59);
     
-    // FIX: Limit to max 10 PICs for the "in" query (Firestore limit is 30, but keep it tight)
-    const picNames = assignedPics.slice(0, 10).map((p: any) => typeof p === 'string' ? p : p.name);
-    const q = query(
-      collection(db, "appointments"), 
-      where("pic", "in", picNames), 
-      where("appointmentDate", ">=", Timestamp.fromDate(startOfMonth)), 
-      where("appointmentDate", "<=", Timestamp.fromDate(endOfMonth))
-    );
+    // Limit to the visible PIC set for the Supabase query.
+    const supabase = getAppointmentSupabaseClient();
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const apps = snapshot.docs.map(doc => {
-        const data = doc.data();
-        const date = data.appointmentDate.toDate();
-        return { 
-          id: doc.id, 
-          day: date.getDate(), 
-          month: date.getMonth(), 
+    const fetchAppointments = async () => {
+      const { data, error } = await supabase
+        .from("appointments")
+        .select("id,appointment_date,pic,client,agenda,status")
+        .gte("appointment_date", startOfMonth.toISOString())
+        .lte("appointment_date", endOfMonth.toISOString());
+
+      if (error) {
+        console.error("UPLINK_SYNC_ERROR", error);
+        setAllAppointments([]);
+        return;
+      }
+
+      setAllAppointments((data || [])
+        .filter((row: any) => assignedPics.some((pic) => siteVisitPicMatches(row.pic, pic)))
+        .map((row: any) => {
+        const date = new Date(row.appointment_date);
+        return {
+          id: row.id,
+          day: date.getDate(),
+          month: date.getMonth(),
           year: date.getFullYear(),
-          pic: data.pic,
-          client: data.client, 
-          agenda: data.agenda || "Standard Operational Deployment", 
-          status: data.status
+          pic: row.pic,
+          client: row.client,
+          agenda: row.agenda || "Standard Operational Deployment",
+          status: row.status,
         };
-      });
-      setAllAppointments(apps);
-    }, (error) => { 
-      console.error("UPLINK_SYNC_ERROR", error);
-    });
+      }));
+    };
 
-    return () => unsubscribe();
+    fetchAppointments();
+    const channel = supabase
+      .channel(`site-visit-calendar-${viewDate.getTime()}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "appointments" }, fetchAppointments)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [assignedPics, viewDate, isHydrated]);
 
   // 4. BLOCKED SLOTS — only subscribe when we have PICs
@@ -424,34 +468,10 @@ export default function SchedulePage() {
       setAllBlockedSlots([]);
       return;
     }
-
-    // FIX: Limit the "in" array to avoid over-fetching; cap at 10 PICs
-    const picNames = assignedPics.slice(0, 10).map((p: any) => typeof p === 'string' ? p : p.name);
-    const targetPics = [...picNames, "ALL_STAFF", "GLOBAL"].slice(0, 10);
-
-    const q = query(
-      collection(db, "blocked_slots"),
-      where("userName", "in", targetPics)
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const slots = snapshot.docs.map(doc => {
-        const data = doc.data();
-        const date = new Date(data.dateString);
-        return {
-          id: doc.id,
-          userName: data.userName,
-          day: date.getDate(),
-          month: date.getMonth(),
-          year: date.getFullYear(),
-          shiftScope: data.shiftScope,
-          justification: data.justification
-        };
-      });
-      setAllBlockedSlots(slots);
-    });
-
-    return () => unsubscribe();
+    // Blocked-slot records remain in the legacy Firebase collection.
+    // Supabase appointment scheduling is authoritative; do not use a denied
+    // Firestore listener as a hard dependency.
+    setAllBlockedSlots([]);
   }, [assignedPics, isHydrated]);
 
   // DERIVED DATA FOR CURRENT SELECTION
@@ -459,8 +479,7 @@ export default function SchedulePage() {
     return (dayNum: number, month: number, year: number) => {
       if (assignedPics.length === 0) return { available: 0, total: 0, isGlobal: false, globalReason: "" };
 
-      const picNames = assignedPics.map(p => typeof p === 'string' ? p : p.name);
-      const total = picNames.length;
+      const total = assignedPics.length;
       
       // Global Blocking check
       const globalBlock = allBlockedSlots.find(s => 
@@ -472,19 +491,25 @@ export default function SchedulePage() {
         return { available: 0, total, isGlobal: true, globalReason: globalBlock.justification };
       }
 
-      const busyPics = new Set();
+      const busyPics = new Set<string>();
 
       // Check appointments
       allAppointments.forEach(a => {
-        if (a.day === dayNum && a.month === month && a.year === year && picNames.includes(a.pic)) {
-          busyPics.add(a.pic);
+        if (a.day === dayNum && a.month === month && a.year === year) {
+          assignedPics.forEach((pic) => {
+            if (siteVisitPicMatches(a.pic, pic)) busyPics.add(pic.referenceId);
+          });
         }
       });
 
       // Check personal blocks
       allBlockedSlots.forEach(s => {
-        if (s.day === dayNum && s.month === month && s.year === year && picNames.includes(s.userName) && s.shiftScope === "FULL_DAY") {
-          busyPics.add(s.userName);
+        if (s.day === dayNum && s.month === month && s.year === year && s.shiftScope === "FULL_DAY") {
+          assignedPics.forEach((pic) => {
+            if (pic.name.trim().toLowerCase() === String(s.userName || "").trim().toLowerCase()) {
+              busyPics.add(pic.referenceId);
+            }
+          });
         }
       });
 
@@ -663,26 +688,52 @@ export default function SchedulePage() {
       
       const appointmentDateObj = new Date(viewDate.getFullYear(), viewDate.getMonth(), selectedDate as number);
       
-      await addDoc(collection(db, "appointments"), {
-        ...formData, 
-        siteVisitNo, // Unique sequential number: PS-2026-036
-        pic: "UNASSIGNED", 
-        appointmentDate: Timestamp.fromDate(appointmentDateObj),
-        protocols: selectedAssistance || [], 
-        personnel: personnel || [],
-        ppe: ppe || [],
-        permits: permits || [],
+      const supabase = getAppointmentSupabaseClient();
+      const appointmentId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+      const { error: insertError } = await supabase.from("appointments").insert({
+        id: appointmentId,
+        site_visit_no: siteVisitNo,
+        client: formData.client,
+        contact_person: formData.contactPerson,
+        email: formData.email,
+        contact_number: formData.contactNumber,
+        requestor_phone: formData.contactNumber,
+        address: formData.address,
+        street: formData.street,
+        landmark: formData.landmark,
         region: regions.find(x => x.code === formData.region)?.name || "",
         province: provinces.find(x => x.code === formData.province)?.name || "",
         city: cities.find(x => x.code === formData.city)?.name || "",
         barangay: barangays.find(x => x.code === formData.barangay)?.name || "",
-        fileUrl, 
-        coordinates: coords, 
+        agenda: formData.agenda,
+        notes: formData.notes,
+        tsa: formData.tsa,
+        tsm: formData.tsm,
+        pic: "UNASSIGNED",
+        protocols: selectedAssistance || [],
+        personnel: personnel || [],
+        ppe: ppe || [],
+        permits: permits || [],
+        appointment_date: toSupabaseTimestamp(appointmentDateObj),
+        coordinates: coords,
+        file_url: fileUrl,
         status: "PENDING",
-        createdAt: serverTimestamp(), 
         department: "ENGINEERING",
-        submittedBy
+        submitted_by: submittedBy,
+        submitted_by_name: userDetails?.name || null,
+        tsm_name: null,
+        sales_head: userDetails?.manager || null,
+        pending_at: new Date().toISOString(),
+        pending_by: userDetails?.name || submittedBy,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       });
+
+      if (insertError) throw insertError;
 
       // Reset context state and clear local storage after successful submission
       resetForm();

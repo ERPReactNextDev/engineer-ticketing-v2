@@ -42,6 +42,14 @@ export type JobRequestRow = JsonRecord & {
   procurementSay?: number | null;
 };
 
+export type JobRequestHistoryRow = JsonRecord & {
+  history_id: string;
+  version_number: number;
+  version_label: string;
+  version_created_at: string;
+  operation: string;
+};
+
 function getSupabaseUrl() {
   return process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL_TICKET || "";
 }
@@ -79,6 +87,148 @@ export function getJobRequestSupabaseClient() {
   }
 
   return client;
+}
+
+export async function getJobRequestHistory(jobRequestNo: string): Promise<JobRequestHistoryRow[]> {
+  const baseJobRequestNo = jobRequestNo.trim().replace(/\.\d+$/, "").toUpperCase();
+  if (!baseJobRequestNo) return [];
+
+  const supabase = getJobRequestSupabaseClient();
+  if (!supabase) throw new Error("Supabase job request client is not configured.");
+
+  const { data, error } = await supabase
+    .from("job_requests_history")
+    .select("*")
+    .eq("job_request_no", baseJobRequestNo)
+    .order("version_created_at", { ascending: false });
+
+  if (error) throw error;
+  return (data ?? []) as JobRequestHistoryRow[];
+}
+
+export async function getJobRequestComparison(jobRequestNo: string): Promise<JsonRecord | null> {
+  const supabase = getJobRequestSupabaseClient();
+  if (!supabase) throw new Error("Supabase job request client is not configured.");
+
+  const { data, error } = await supabase
+    .from("job_request_comparison")
+    .select("*")
+    .eq("job_request_no", jobRequestNo.trim().replace(/\.\d+$/, "").toUpperCase())
+    .maybeSingle();
+
+  if (error) throw error;
+  return data as JsonRecord | null;
+}
+
+export async function decideJobRequestRevision(
+  jobRequestNo: string,
+  decision: "approve" | "reject",
+  referenceId: string,
+): Promise<void> {
+  const supabase = getJobRequestSupabaseClient();
+  if (!supabase) throw new Error("Supabase job request client is not configured.");
+
+  const normalizedJobRequestNo = jobRequestNo.trim().replace(/\.\d+$/, "").toUpperCase();
+  const { data: revision, error: revisionError } = await supabase
+    .from("job_request_comparison")
+    .select("*")
+    .eq("job_request_no", normalizedJobRequestNo)
+    .maybeSingle();
+
+  if (revisionError) throw revisionError;
+  if (!revision) throw new Error("This job-request revision is no longer available.");
+  if (revision.status !== "REVISED JR FORM FORWARD TO ENGINEERING") {
+    throw new Error("This revision is not awaiting Engineering's decision.");
+  }
+
+  const { data: history, error: historyFetchError } = await supabase
+    .from("job_requests_history")
+    .select("history_id")
+    .eq("job_request_no", normalizedJobRequestNo)
+    .eq("status", "REVISED JR FORM FORWARD TO ENGINEERING")
+    .order("version_created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (historyFetchError) throw historyFetchError;
+  if (!history?.history_id) {
+    const resolvedStatus = decision === "approve"
+      ? "JR FORM FORWARD TO ENGINEERING"
+      : "JR FORM REJECTED BY ENGINEERING";
+    const { data: resolvedHistory, error: resolvedHistoryError } = await supabase
+      .from("job_requests_history")
+      .select("history_id")
+      .eq("job_request_no", normalizedJobRequestNo)
+      .eq("status", resolvedStatus)
+      .eq("engineer_revision_decision_reference_id", referenceId)
+      .gte("updated_at", String(revision.updated_at ?? revision.created_at ?? ""))
+      .order("version_created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (resolvedHistoryError) throw resolvedHistoryError;
+    if (resolvedHistory?.history_id) {
+      const { error: retryDeleteError } = await supabase
+        .from("job_request_comparison")
+        .delete()
+        .eq("id", revision.id)
+        .select("id")
+        .single();
+
+      if (retryDeleteError) throw retryDeleteError;
+      return;
+    }
+
+    throw new Error("The revision history snapshot could not be found.");
+  }
+
+  if (decision === "approve") {
+    const { data: request, error: requestFetchError } = await supabase
+      .from("job_requests")
+      .select("id")
+      .eq("job_request_no", normalizedJobRequestNo)
+      .maybeSingle();
+
+    if (requestFetchError) throw requestFetchError;
+    if (!request?.id) throw new Error("The original job request could not be found.");
+
+    const updatedRequest: JsonRecord = { ...revision };
+    delete updatedRequest.id;
+    delete updatedRequest.sales_remarks;
+    delete updatedRequest.engineer_revision_decision_reference_id;
+    updatedRequest.status = "JR FORM FORWARD TO ENGINEERING";
+    updatedRequest.updated_at = new Date().toISOString();
+
+    const { error: requestUpdateError } = await supabase
+      .from("job_requests")
+      .update(updatedRequest)
+      .eq("id", request.id);
+
+    if (requestUpdateError) throw requestUpdateError;
+  }
+
+  const historyStatus = decision === "approve"
+    ? "JR FORM FORWARD TO ENGINEERING"
+    : "JR FORM REJECTED BY ENGINEERING";
+  const { error: historyUpdateError } = await supabase
+    .from("job_requests_history")
+    .update({
+      status: historyStatus,
+      engineer_revision_decision_reference_id: referenceId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("history_id", history.history_id);
+
+  if (historyUpdateError) throw historyUpdateError;
+
+  const { error: deleteError } = await supabase
+    .from("job_request_comparison")
+    .delete()
+    .eq("id", revision.id)
+    .select("id")
+    .single();
+
+  if (deleteError) throw deleteError;
 }
 
 function toCamelCase(input: string): string {

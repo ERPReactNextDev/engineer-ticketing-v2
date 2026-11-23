@@ -11,8 +11,6 @@ import { NavMain }      from "./nav-main"
 import { NavSecondary } from "./nav-secondary"
 import { NavUser }      from "./nav-user"
 
-import { db } from "@/lib/firebase"
-import { collection, onSnapshot, doc, getDoc, getDocs, query } from "firebase/firestore"
 import { conxStorage, clearAllCookies } from "@/utils/storage-helper"
 
 // Helper to make API calls to Supabase via API routes

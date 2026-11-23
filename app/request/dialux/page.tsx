@@ -43,7 +43,7 @@ import { format } from "date-fns"
 
 // DATABASE TOOLS
 import { db } from "@/lib/firebase"
-import { collection, onSnapshot, query, orderBy, where, doc, writeBatch, updateDoc, Timestamp, getDoc } from "firebase/firestore"
+import { collection, onSnapshot, query, orderBy, where, doc, writeBatch, updateDoc, Timestamp } from "firebase/firestore"
 
 // SHARED COMPONENTS
 import { PageHeader } from "@/components/page-header"
@@ -294,9 +294,7 @@ export default function DialuxManagementPage() {
                 const res = await fetch(`/api/user?id=${encodeURIComponent(storedId)}`)
                 const data = await res.json()
 
-                // Get role from firestore for accuracy
-                const userDoc = await getDoc(doc(db, "users", storedId))
-                const firestoreRole = (userDoc.exists() ? (userDoc.data().Role || userDoc.data().role || "MEMBER") : "MEMBER").toUpperCase()
+                const primaryRole = String(data.engiconnect_role || data.Role || data.role || "MEMBER").toUpperCase().trim()
 
                 const name = `${data.Firstname || ""} ${data.Lastname || ""}`.trim()
                 const referenceId = (data.ReferenceID || "").toUpperCase()
@@ -304,8 +302,7 @@ export default function DialuxManagementPage() {
                 /**
                  * ROLE DETECTION STRATEGY:
                  * - For SALES dept: Use MongoDB Position as primary (supports TSM/TSA hierarchy)
-                 * - For other depts: Use Firebase Role as primary (IT, Engineering, etc.)
-                 * - Fallback to Firebase Role if Position is empty/generic
+                 * - For other departments: Use the Supabase role as primary
                  */
                 const dept = (data.Department || "").toUpperCase()
                 const position = (data.Position || "").toUpperCase()
@@ -314,16 +311,16 @@ export default function DialuxManagementPage() {
                 // Sales-specific role detection based on Position
                 const isTSM = isSalesDept 
                     ? (position.includes("TERRITORY SALES MANAGER") && !position.includes("ASSOCIATE"))
-                    : (firestoreRole === "TSM" || firestoreRole === "TERRITORY SALES MANAGER")
+                    : (primaryRole === "TSM" || primaryRole === "TERRITORY SALES MANAGER")
                 
                 const isTSA = isSalesDept && position.includes("TERRITORY SALES ASSOCIATE")
                 
                 const isManager = isSalesDept
                     ? (position.includes("SALES HEAD") || position.includes("MANAGER"))
-                    : (firestoreRole === "MANAGER" || firestoreRole === "SALES HEAD")
+                    : (primaryRole === "MANAGER" || primaryRole === "SALES HEAD")
                 
-                // Determine final role priority: Manager > TSM > TSA > Firestore Role
-                let finalRole = firestoreRole
+                // Determine final role priority: Manager > TSM > TSA > Supabase role
+                let finalRole = primaryRole
                 if (isManager) finalRole = "MANAGER"
                 else if (isTSM) finalRole = "TSM"
                 else if (isTSA) finalRole = "TSA"

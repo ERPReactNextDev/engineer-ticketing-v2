@@ -8,7 +8,7 @@ import {
   ShieldCheck, ChevronLeft, Image as ImageIcon, ExternalLink,
   Check, X, Timer, FileText, Briefcase, MapPin, User, Copy,
   ArrowRight, Info, AlertCircle, Share2, Calendar, Activity,
-  Download, Building2, ClipboardList, Timer as TimerIcon,
+  Download, Building2, ClipboardList,
   Search, Eye, Trash2, Edit3, Send, Plus, Fingerprint,
   Radio, Cpu, ShieldAlert, Wrench, LayoutGrid, Ruler, Construction,
   UploadCloud, Minus
@@ -25,6 +25,16 @@ import { toast } from "sonner";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -50,8 +60,11 @@ import {
   type JobFillUpFormValues,
   type BoqSection,
   type BoqSummary,
+  type BoqVersion,
   type ProcurementData,
 } from "../../../../components/job-fill-up-form-dialog";
+import { JobRequestVersionHistoryDialog } from "@/components/job-request-version-history";
+import { JobRequestRevisionReviewDialog } from "@/components/job-request-revision-review-dialog";
 
 /** Approval flow order: Member -> Leader -> Manager -> Procurement -> Procurement Approved */
 const STATUS_ORDER = [
@@ -109,6 +122,89 @@ function getPdDatabaseItems(job: Record<string, unknown> | null | undefined): Pd
   });
 }
 
+function getContactValues(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => (item == null ? "" : String(item).trim()));
+  }
+  if (typeof value !== "string" || !value.trim()) return [];
+
+  const trimmed = value.trim();
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => (item == null ? "" : String(item).trim()));
+      }
+    } catch {
+      // Fall back to the comma-separated format used by job requests.
+    }
+  }
+
+  return trimmed.split(",").map((item) => item.trim());
+}
+
+function ContactCards({
+  contactPerson,
+  designation,
+  email,
+  contactNumber,
+}: {
+  contactPerson: unknown;
+  designation: unknown;
+  email: unknown;
+  contactNumber: unknown;
+}) {
+  const fields = [
+    { key: "name", label: "Contact person", value: getContactValues(contactPerson) },
+    { key: "designation", label: "Designation", value: getContactValues(designation) },
+    { key: "email", label: "Email address", value: getContactValues(email) },
+    { key: "number", label: "Contact number", value: getContactValues(contactNumber) },
+  ];
+  const count = Math.max(...fields.map((field) => field.value.length));
+
+  if (!count) return null;
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {Array.from({ length: count }, (_, index) => (
+        <div key={index} className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            Contact {index + 1}
+          </p>
+          <dl className="grid gap-2">
+            {fields.map((field) => {
+              const value = field.value[index] || "—";
+              const canCopy = value !== "—" && (field.key === "email" || field.key === "number");
+
+              return (
+                <div key={field.key} className="min-w-0">
+                  <dt className="text-[10px] font-semibold text-slate-500">{field.label}</dt>
+                  <dd className="mt-0.5 flex items-start justify-between gap-2 break-words text-xs text-slate-800">
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{value}</span>
+                    {canCopy && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(value);
+                          toast.success(`${field.label} copied`);
+                        }}
+                        className="shrink-0 rounded p-1 text-slate-400 transition-colors hover:bg-white hover:text-blue-600"
+                        aria-label={`Copy ${field.label.toLowerCase()}`}
+                      >
+                        <Copy size={12} />
+                      </button>
+                    )}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function formatLocalCalendarDate(value: unknown): string {
   if (typeof value !== "string" && !(value instanceof Date)) return "N/A";
   if (typeof value === "string" && !value.trim()) return "N/A";
@@ -121,15 +217,41 @@ function formatLocalCalendarDate(value: unknown): string {
 }
 
 function PdDatabaseItemsView({ items }: { items: PdDatabaseRequestItem[] }) {
+  const [search, setSearch] = useState("");
   if (!items.length) return null;
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const filteredItems = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => !normalizedSearch
+      || `${item.productName} ${item.itemCode} ${item.description}`.toLocaleLowerCase().includes(normalizedSearch));
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2 border-b border-slate-50 pb-1.5">
-        <ImageIcon size={12} className="text-blue-500" />
-        <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">PD Database Items</span>
-      </div>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {items.map((item, index) => (
+    <section className="flex max-h-[60vh] min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200">
+      <header className="sticky top-0 z-10 shrink-0 space-y-2 border-b bg-white p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ImageIcon size={12} className="text-blue-500" />
+            <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">PD Database Items</span>
+          </div>
+          <span className="text-[9px] text-slate-400">{items.length} items</span>
+        </div>
+        {items.length > 1 && (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              aria-label="Search PD Database items"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search product name, item code, or description..."
+              className="h-9 w-full rounded-md border border-slate-200 bg-white pl-9 pr-3 text-xs outline-none focus-visible:border-slate-400 focus-visible:ring-2 focus-visible:ring-slate-200"
+            />
+          </div>
+        )}
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
+        <div className="grid gap-2 sm:grid-cols-2">
+        {filteredItems.map(({ item, index }) => (
           <div key={`${item.productId}-${index}`} className="flex min-w-0 items-center gap-3 rounded-lg border border-slate-200 p-2.5">
             {item.imageUrl ? (
               <Image src={item.imageUrl} alt={item.productName} width={56} height={56} unoptimized className="size-14 shrink-0 rounded-md border object-cover" />
@@ -144,8 +266,14 @@ function PdDatabaseItemsView({ items }: { items: PdDatabaseRequestItem[] }) {
             </div>
           </div>
         ))}
+        </div>
+        {filteredItems.length === 0 && (
+          <p className="rounded-lg border border-dashed p-4 text-center text-xs text-slate-500">
+            No items match “{search}”.
+          </p>
+        )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -156,15 +284,19 @@ export default function JobDetailsPage() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [pendingStatusUpdate, setPendingStatusUpdate] = useState<{
+    newStatus: string;
+    draftOverride?: FillUpDraft | null;
+    remarksOverride?: string;
+    resolve: (result: boolean) => void;
+  } | null>(null);
   // Internal notes: one per role
   const [memberNotes, setMemberNotes] = useState("");
   const [leaderNotes, setLeaderNotes] = useState("");
   const [managerNotes, setManagerNotes] = useState("");
   const [procurementNotes, setProcurementNotes] = useState("");
   const [userContext, setUserContext] = useState({ id: "", referenceId: "", name: "", role: "", profilePicture: "", department: "", engiconnectRole: "" });
-  const [elapsedTime, setElapsedTime] = useState("0h 0m");
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [countdown, setCountdown] = useState("00:00:00");
   const [isOverdue, setIsOverdue] = useState(false);
   const [activeTab, setActiveTab] = useState("details");
   const [signedJRForm, setSignedJRForm] = useState<File | null>(null);
@@ -374,22 +506,9 @@ export default function JobDetailsPage() {
       if (data?.createdAt) {
         const start = new Date(data.createdAt.seconds * 1000).getTime();
         const now = new Date().getTime();
-        
-        // SLA: 24h limit
-        const limit = start + (24 * 60 * 60 * 1000);
-        const diff = limit - now;
-        const absDiff = Math.abs(diff);
-        const h = Math.floor(absDiff / (1000 * 60 * 60));
-        const m = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
-        const s = Math.floor((absDiff % (1000 * 60)) / 1000);
-        setCountdown(`${diff < 0 ? '-' : ''}${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`);
-        setIsOverdue(diff < 0);
-
-        // Total Elapsed
-        const elapsed = now - start;
-        const eh = Math.floor(elapsed / (1000 * 60 * 60));
-        const em = Math.floor((elapsed % (1000 * 60 * 60)) / (1000 * 60));
-        setElapsedTime(`${eh}h ${em}m`);
+        if (Number.isFinite(start)) {
+          setIsOverdue(now > start + (24 * 60 * 60 * 1000));
+        }
       }
     }, 1000);
     return () => clearInterval(timer);
@@ -444,6 +563,12 @@ export default function JobDetailsPage() {
         { label: "Return to Engineering Associate", status: "JR FORM FORWARD TO ENGINEERING" },
         { label: "Mark as Finished", status: "JR Form Forward to Procurement" },
       ]
+    : (isProcurement || isAdmin) && (isAtProcurementStage || isApprovedByProcurement)
+    ? [{
+        label: "JR Form Approved by Procurement",
+        status: "JR FORM APPROVED BY PROCUREMENT",
+        disabled: isApprovedByProcurement,
+      }]
     : undefined;
 
   // Draft that procurement can view: the job_fill_ups draft, or the copy saved
@@ -455,6 +580,7 @@ export default function JobDetailsPage() {
           values: data.fillUpForm.values,
           boqSections: data.fillUpForm.boqSections,
           summary: data.fillUpForm.summary,
+          boqs: data.fillUpForm.boqs,
           createdByName: data.fillUpForm.savedBy || "",
         } as FillUpDraft)
       : null);
@@ -470,12 +596,14 @@ export default function JobDetailsPage() {
     values: JobFillUpFormValues,
     boqSections: BoqSection[],
     summary: BoqSummary,
-    procurement?: ProcurementData
+    procurement?: ProcurementData,
+    boqs?: BoqVersion[]
   ): Promise<FillUpDraft> => {
     const savedDraft = await saveBoqDraft(params.id, {
       values,
       boqSections,
       summary,
+      boqs,
       ...(procurement ? { procurement: { ...procurement, savedBy: userContext.name } } : {}),
       status: fillUpDraft?.status ?? "draft",
       createdBy: fillUpDraft?.createdBy ?? userContext.id,
@@ -487,19 +615,24 @@ export default function JobDetailsPage() {
   };
 
   /**
-   * Procurement columns of the Fill Up Form -> job_fill_ups/{id}.procurement
-   * Kept separate from boqSections and NOT copied into job_requests.fillUpForm,
-   * so Engineering / Sales never get it.
+   * Save Procurement inputs and BOQ cost edits to the fill-up draft.
+   * Procurement data remains in its own field and is not copied into job_requests.fillUpForm.
    */
-  const handleSaveProcurement = async (procurement: ProcurementData) => {
+  const handleSaveProcurement = async (
+    procurement: ProcurementData,
+    boqSections: BoqSection[],
+    summary: BoqSummary,
+    boqs?: BoqVersion[]
+  ): Promise<FillUpDraft> => {
     const savedDraft = await saveBoqDraft(params.id, {
       ...(viewableFillUp
         ? {
             values: viewableFillUp.values,
-            boqSections: viewableFillUp.boqSections,
-            summary: viewableFillUp.summary,
           }
         : {}),
+      boqSections,
+      summary,
+      boqs,
       procurement: { ...procurement, savedBy: userContext.name, savedAt: new Date().toISOString() },
       status: fillUpDraft?.status ?? (viewableFillUp ? "completed" : "draft"),
       createdBy: fillUpDraft?.createdBy ?? userContext.id,
@@ -507,9 +640,10 @@ export default function JobDetailsPage() {
       updatedBy: userContext.name,
     });
     setFillUpDraft(savedDraft as FillUpDraft);
+    return savedDraft as FillUpDraft;
   };
 
-  const handleUpdateStatus = async (
+  const executeStatusUpdate = async (
     newStatus: string,
     draftOverride?: FillUpDraft | null,
     remarksOverride?: string
@@ -531,6 +665,7 @@ export default function JobDetailsPage() {
       const isForwardToProcurement = newStatus === "JR Form Forward to Procurement";
       const isForwardToEngineeringManager = newStatus === "JR FORM FORWARD TO ENGINEERING MANAGER";
       const isForwardToEngineeringLeader = newStatus === "JR FORM FORWARD TO ENGINEERING LEADER";
+      const isProcurementApproval = newStatus === "JR FORM APPROVED BY PROCUREMENT";
       const isReturnToEngineeringAssociate =
         newStatus === "JR FORM FORWARD TO ENGINEERING" &&
         (isEngineeringLeader || isEngineeringManager);
@@ -593,10 +728,13 @@ export default function JobDetailsPage() {
       }
 
       // Procurement approval
-      if (newStatus === "JR FORM APPROVED BY PROCUREMENT") {
+      if (isProcurementApproval) {
         updateData.procurementApprovedAt = now;
         updateData.approvedByProcurement = userContext.referenceId;
         updateData.approvedByProcurementName = userContext.name;
+        if (currentFillUpDraft?.boqs) {
+          updateData.boqs = currentFillUpDraft.boqs;
+        }
         // SAY (rounded total) is copied here so Sales can read it from the job request
         updateData.procurementSay = currentFillUpDraft?.procurement?.summary?.say ?? null;
 // Full procurement computation snapshot (summary only, no per-item rows)
@@ -647,20 +785,24 @@ if (currentFillUpDraft?.procurement) {
 
       }
 
-      // Copy the saved Fill Up Form draft into the job request (column: fillUpForm)
-      // NOTE: procurement data is intentionally NOT copied here.
+      // Snapshot the saved fill-up draft with procurement values when procurement approves it.
       if (
         currentFillUpDraft &&
         (isForwardToProcurement ||
           isForwardToEngineeringManager ||
           isForwardToEngineeringLeader ||
           isReturnToEngineeringAssociate ||
-          isReturnToEngineeringLeader)
+          isReturnToEngineeringLeader ||
+          isProcurementApproval)
       ) {
         updateData.fillUpForm = {
           values: currentFillUpDraft.values,
           boqSections: currentFillUpDraft.boqSections,
           summary: currentFillUpDraft.summary,
+          boqs: currentFillUpDraft.boqs,
+          ...(isProcurementApproval && currentFillUpDraft.procurement
+            ? { procurement: currentFillUpDraft.procurement }
+            : {}),
           savedBy: currentFillUpDraft.createdByName || "",
           savedAt: currentFillUpDraft.createdAt ?? null,
         };
@@ -678,6 +820,7 @@ if (currentFillUpDraft?.procurement) {
           values: currentFillUpDraft.values,
           boqSections: currentFillUpDraft.boqSections,
           summary: currentFillUpDraft.summary,
+          boqs: currentFillUpDraft.boqs,
           ...(currentFillUpDraft.procurement ? { procurement: currentFillUpDraft.procurement } : {}),
           status: "completed",
           createdBy: currentFillUpDraft.createdBy ?? userContext.id,
@@ -698,6 +841,35 @@ if (currentFillUpDraft?.procurement) {
     } finally {
       setIsUpdating(false);
     }
+  };
+
+  const handleUpdateStatus = (
+    newStatus: string,
+    draftOverride?: FillUpDraft | null,
+    remarksOverride?: string,
+  ): Promise<boolean> => new Promise((resolve) => {
+    if (pendingStatusUpdate) {
+      resolve(false);
+      return;
+    }
+    setPendingStatusUpdate({ newStatus, draftOverride, remarksOverride, resolve });
+  });
+
+  const confirmStatusUpdate = async () => {
+    if (!pendingStatusUpdate || isUpdating) return;
+    const pending = pendingStatusUpdate;
+    const succeeded = await executeStatusUpdate(
+      pending.newStatus,
+      pending.draftOverride,
+      pending.remarksOverride,
+    );
+    pending.resolve(succeeded);
+    setPendingStatusUpdate(null);
+  };
+
+  const cancelStatusUpdate = () => {
+    pendingStatusUpdate?.resolve(false);
+    setPendingStatusUpdate(null);
   };
 
   if (loading) return <LoadingScreen />;
@@ -845,21 +1017,6 @@ if (currentFillUpDraft?.procurement) {
                   <span className="text-[6px] font-black text-slate-400 uppercase tracking-widest">Logged in as</span>
                   <span className="text-[9px] font-black text-blue-600 uppercase">{userContext.name}</span>
                 </div>
-                <div className={cn(
-                    "flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg border transition-all shrink-0 bg-white border-slate-200 shadow-sm",
-                    isOverdue ? "bg-red-50 border-red-100" : ""
-                )}>
-                    <div className="flex flex-col items-end border-r pr-1.5 border-slate-100">
-                        <span className={cn("text-[5px] font-black uppercase tracking-widest leading-none", isOverdue ? "text-red-500" : "text-slate-400")}>SLA</span>
-                        <span className={cn("text-[6px] font-bold uppercase mt-0.5", isOverdue ? "text-red-600" : "text-slate-500")}>LIMIT</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                        <TimerIcon size={9} className={cn("shrink-0", isOverdue ? "text-red-500" : "text-blue-500")} />
-                        <span className={cn("text-[9px] font-mono font-black tabular-nums leading-none", isOverdue ? "text-red-600" : "text-slate-900")}>
-                            {countdown}
-                        </span>
-                    </div>
-                </div>
                 <Button
                   variant="outline"
                   size="sm"
@@ -889,10 +1046,6 @@ if (currentFillUpDraft?.procurement) {
                     </div>
                     <div className="flex flex-col">
                         <span className="text-[11px] font-black uppercase tracking-tight text-slate-900 leading-none mb-1 whitespace-nowrap">{status}</span>
-                        <div className="flex items-center gap-1">
-                            <TimerIcon size={8} className={cn(isOverdue ? "text-red-500" : "text-blue-500")} />
-                            <span className={cn("text-[8px] font-mono font-black tabular-nums", isOverdue ? "text-red-600" : "text-slate-600")}>{countdown}</span>
-                        </div>
                     </div>
                 </div>
 
@@ -929,15 +1082,6 @@ if (currentFillUpDraft?.procurement) {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-3 pl-3 border-l border-slate-100 shrink-0">
-                    <div className="flex flex-col items-end">
-                        <span className="text-[6px] font-black uppercase text-slate-400 tracking-widest leading-none mb-1">Elapsed</span>
-                        <span className="text-[10px] font-black text-slate-900 leading-none">{elapsedTime}</span>
-                    </div>
-                    <div className="size-7 rounded-lg bg-slate-50 flex items-center justify-center text-slate-400">
-                        <History size={12} />
-                    </div>
-                </div>
             </div>
 
             {/* --- COMPACT STATS ROW --- */}
@@ -995,18 +1139,6 @@ if (currentFillUpDraft?.procurement) {
                           >
                             <Eye size={10} />
                             {viewableFillUp ? "View Fill Up Form" : "No Fill Up Form Yet"}
-                          </Button>
-                        )}
-
-                        {/* Procurement / Admin: approve once the request is at the procurement stage */}
-                        {/* Procurement / Admin: stays visible once at procurement stage, disabled after approval */}
-                        {(isProcurement || isAdmin) && (isAtProcurementStage || isApprovedByProcurement) && (
-                          <Button
-                            onClick={() => handleUpdateStatus("JR FORM APPROVED BY PROCUREMENT")}
-                            disabled={isUpdating || isApprovedByProcurement}
-                            className="w-full h-12 bg-[#00C853] disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black uppercase text-[11px] tracking-widest rounded-xl shadow-lg shadow-emerald-900/40"
-                          >
-                            {isUpdating ? "Saving..." : "JR Form Approved by Procurement"}
                           </Button>
                         )}
 
@@ -1168,14 +1300,12 @@ if (currentFillUpDraft?.procurement) {
                       <ManifestItem label="Project Title" value={data?.projectTitle} icon={FileText} />
                       <ManifestItem label="Location" value={locationNode} icon={MapPin} isLongText />
 
-                      {(data?.contactPerson || data?.contactDesignation || data?.email || data?.contactNumber) && (
-                        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-                          <ManifestItem label="Contact Person" value={data?.contactPerson} icon={User} />
-                          <ManifestItem label="Designation" value={data?.contactDesignation || "Not provided"} icon={Briefcase} />
-                          <ManifestItem label="Email address" value={data?.email || "Not provided"} icon={Send} canCopy />
-                          <ManifestItem label="Contact number" value={data?.contactNumber || "Not provided"} icon={Radio} canCopy />
-                        </div>
-                      )}
+                      <ContactCards
+                        contactPerson={data?.contactPerson}
+                        designation={data?.contactDesignation}
+                        email={data?.email}
+                        contactNumber={data?.contactNumber}
+                      />
 
                       <Separator className="bg-slate-50" />
 
@@ -1323,7 +1453,7 @@ if (currentFillUpDraft?.procurement) {
 
                 {/* RIGHT (3): MEDIA CENTER */}
                 <div className="col-span-3 flex flex-col gap-2 h-full overflow-hidden">
-                  <div className="bg-white border border-slate-200/50 rounded-xl shadow-sm flex flex-col flex-1 min-h-0">
+                  <div className="bg-white border border-slate-200/50 rounded-xl shadow-sm flex flex-col shrink-0">
                     <div className="bg-slate-50/50 px-3 py-2 border-b border-slate-100 flex items-center justify-between shrink-0">
                       <span className="text-[8px] font-black uppercase text-slate-400 tracking-widest flex items-center gap-1">
                         <ImageIcon size={12} className="text-blue-500" /> Photo Gallery
@@ -1335,11 +1465,11 @@ if (currentFillUpDraft?.procurement) {
                       )}
                     </div>
                     
-                    <div className="flex-1 overflow-y-auto p-2 space-y-2 scrollbar-hide">
+                    <div className="shrink-0 p-2 space-y-2">
                       {hasImages ? (
                         <>
                           <div
-                            className="bg-slate-100 rounded-lg overflow-hidden h-[150px] relative flex items-center justify-center ring-1 ring-slate-200/50 cursor-pointer hover:ring-blue-300 transition-all"
+                            className="bg-slate-100 rounded-lg overflow-hidden h-[120px] relative flex items-center justify-center ring-1 ring-slate-200/50 cursor-pointer hover:ring-blue-300 transition-all"
                             onClick={() => { setPreviewImage(selectedImage); setImagePreviewOpen(true); }}
                           >
                             <TransformWrapper>
@@ -1348,13 +1478,13 @@ if (currentFillUpDraft?.procurement) {
                               </TransformComponent>
                             </TransformWrapper>
                           </div>
-                          <div className="grid grid-cols-4 gap-1">
+                          <div className="flex gap-1 overflow-x-auto scrollbar-hide">
                             {data.attachments?.map((img: string, idx: number) => (
                               <button
                                 key={idx}
                                 onClick={() => { setSelectedImage(img); setPreviewImage(img); setImagePreviewOpen(true); }}
                                 className={cn(
-                                  "aspect-square rounded-md border-2 overflow-hidden transition-all shadow-sm",
+                                  "size-10 shrink-0 rounded-md border-2 overflow-hidden transition-all shadow-sm",
                                   selectedImage === img ? "border-blue-500 scale-95" : "border-slate-100 opacity-60 hover:opacity-100"
                                 )}
                               >
@@ -1364,14 +1494,40 @@ if (currentFillUpDraft?.procurement) {
                           </div>
                         </>
                       ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-slate-200 gap-2">
-                          <ImageIcon size={32} />
+                        <div className="flex flex-col items-center justify-center gap-1 py-3 text-slate-200">
+                          <ImageIcon size={20} />
                           <span className="text-[8px] font-black uppercase">No Photos</span>
                         </div>
                       )}
                     </div>
                   </div>
                   
+                  {data?.jobRequestNo ? (
+                    <>
+                      <JobRequestVersionHistoryDialog
+                        jobRequestId={params.id}
+                        jobRequestNo={data.jobRequestNo}
+                        department={userContext.department}
+                      />
+                      {(isEngineering || isAdmin) && (
+                        <JobRequestRevisionReviewDialog
+                          jobRequestNo={data.jobRequestNo}
+                          referenceId={userContext.referenceId}
+                          onResolved={() => {
+                            void getJobRequestById(params.id)
+                              .then((updatedRequest) => {
+                                if (updatedRequest) setData(updatedRequest);
+                              })
+                              .catch((reason) => {
+                                console.error("Failed to refresh the job request after revision decision:", reason);
+                                toast.error("Decision saved, but the job request view could not be refreshed.");
+                              });
+                          }}
+                        />
+                      )}
+                    </>
+                  ) : null}
+
                   {/* Small Info Box */}
                   <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100/50 shrink-0">
                     <p className="text-[8px] font-bold text-blue-700 leading-tight uppercase">
@@ -1447,14 +1603,12 @@ if (currentFillUpDraft?.procurement) {
                       <ManifestItem label={requestorLabel} value={requestorValue} icon={hasAgent ? Fingerprint : User} />
                       <ManifestItem label="Project Title" value={data?.projectTitle} icon={FileText} />
                       <ManifestItem label="Location" value={locationNode} icon={MapPin} isLongText />
-                      {(data?.contactPerson || data?.contactDesignation || data?.email || data?.contactNumber) && (
-                        <div className="grid grid-cols-2 gap-3">
-                          <ManifestItem label="Contact Person" value={data?.contactPerson} icon={User} />
-                          <ManifestItem label="Designation" value={data?.contactDesignation || "Not provided"} icon={Briefcase} />
-                          <ManifestItem label="Email address" value={data?.email || "Not provided"} icon={Send} canCopy />
-                          <ManifestItem label="Contact number" value={data?.contactNumber || "Not provided"} icon={Radio} canCopy />
-                        </div>
-                      )}
+                      <ContactCards
+                        contactPerson={data?.contactPerson}
+                        designation={data?.contactDesignation}
+                        email={data?.email}
+                        contactNumber={data?.contactNumber}
+                      />
                     </div>
 
                     {/* Work Schedule */}
@@ -1614,7 +1768,7 @@ if (currentFillUpDraft?.procurement) {
                   <div className="p-3">
                     {hasImages ? (
                       <div className="space-y-3">
-                        <div className="aspect-video bg-slate-100 rounded-lg overflow-hidden relative border border-slate-200 cursor-pointer hover:border-blue-300 transition-all" onClick={() => { setPreviewImage(selectedImage); setImagePreviewOpen(true); }}>
+                        <div className="h-36 bg-slate-100 rounded-lg overflow-hidden relative border border-slate-200 cursor-pointer hover:border-blue-300 transition-all" onClick={() => { setPreviewImage(selectedImage); setImagePreviewOpen(true); }}>
                           <img src={selectedImage || ""} className="w-full h-full object-contain" />
                           <div className="absolute inset-0 bg-black/0 hover:bg-black/10 transition-all flex items-center justify-center opacity-0 hover:opacity-100">
                             <Eye size={24} className="text-white drop-shadow-lg" />
@@ -1622,7 +1776,7 @@ if (currentFillUpDraft?.procurement) {
                         </div>
                         <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
                           {data.attachments?.map((img: string, idx: number) => (
-                            <button key={idx} onClick={() => { setSelectedImage(img); setPreviewImage(img); setImagePreviewOpen(true); }} className={cn("size-14 rounded-lg border-2 shrink-0 transition-all cursor-pointer hover:scale-105", selectedImage === img ? "border-blue-500 scale-95" : "border-slate-200 opacity-60")}>
+                            <button key={idx} onClick={() => { setSelectedImage(img); setPreviewImage(img); setImagePreviewOpen(true); }} className={cn("size-10 rounded-lg border-2 shrink-0 transition-all cursor-pointer hover:scale-105", selectedImage === img ? "border-blue-500 scale-95" : "border-slate-200 opacity-60")}>
                               <img src={img} className="w-full h-full object-cover" />
                             </button>
                           ))}
@@ -1691,17 +1845,6 @@ if (currentFillUpDraft?.procurement) {
                         >
                           <Eye size={12} />
                           {viewableFillUp ? "View Fill Up Form" : "No Fill Up Form Yet"}
-                        </Button>
-                      )}
-
-                      {/* Procurement / Admin: approve once the request is at the procurement stage */}
-                      {(isProcurement || isAdmin) && (isAtProcurementStage || isApprovedByProcurement) && (
-                        <Button
-                          onClick={() => handleUpdateStatus("JR FORM APPROVED BY PROCUREMENT")}
-                          disabled={isUpdating || isApprovedByProcurement}
-                          className="w-full h-12 bg-[#00C853] disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed text-white font-black uppercase text-[11px] tracking-widest rounded-xl shadow-lg shadow-emerald-900/40"
-                        >
-                          {isUpdating ? "Saving..." : "JR Form Approved by Procurement"}
                         </Button>
                       )}
 
@@ -1855,16 +1998,46 @@ if (currentFillUpDraft?.procurement) {
             draft={draftToLoad}
             onSubmit={handleSaveFillUpDraft}
             advanceActions={fillUpAdvanceActions}
-            onAdvance={handleUpdateStatus}
+            onAdvance={executeStatusUpdate}
             remarksLabel={fillUpRemarksLabel}
             remarks={fillUpRemarks}
             remarksEditable={canEditFillUpRemarks}
             readOnly={isFillUpFormReadOnly}
             showProcurement={isProcurement || isAdmin}
             procurementEditable={canEditProcurementNotes}
+            engineeringMode={isEngineering}
             allowBoqCustomPricing={!isEngineering}
             onSaveProcurement={handleSaveProcurement}
           />
+
+          <AlertDialog
+            open={pendingStatusUpdate !== null}
+            onOpenChange={(isOpen) => {
+              if (!isOpen && !isUpdating) cancelStatusUpdate();
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Confirm job request status change?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Are you sure you want to move this request to “{pendingStatusUpdate?.newStatus}”?
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={isUpdating}>No, Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={isUpdating}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void confirmStatusUpdate();
+                  }}
+                >
+                  {isUpdating ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+                  Yes, Continue
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           
           {/* Image Preview Dialog */}
           <ImagePreviewDialog

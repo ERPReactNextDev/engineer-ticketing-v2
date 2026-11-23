@@ -254,6 +254,13 @@ Visual workflow showing approval stages with color-coded indicators:
 - Zoom and pan functionality for detailed inspection
 - Supports multiple photos
 
+**Job Request Version History:**
+- Open **Version history** below the Photo Gallery to review saved versions of the parent job request.
+- Versions are listed newest first; selecting one shows its snapshot and highlights changes from the preceding version.
+- Attachments appear as a Photo Gallery with image previews, while PD Database selections appear as item cards.
+- Use **View fill up form** to open the saved snapshot in a separate read-only viewer, including BOQ and Procurement details. The viewer supports navigating between BOQ versions and can be closed without closing the history dialog.
+- History is loaded from `public.job_requests_history` in Supabase by the base `job_request_no`; the table must exist and be readable by the application's Supabase client.
+
 **Engineering Console:**
 - **Member Notes:** Engineering member's remarks (visible to all engineering roles)
 - **Leader Notes:** Engineering leader's remarks (visible to all engineering roles)

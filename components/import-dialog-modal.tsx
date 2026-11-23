@@ -7,10 +7,6 @@ import { toast } from "sonner"
 import {
     Upload, RefreshCw, FileJson, X,
 } from "lucide-react"
-import {
-    collection, writeBatch, doc, updateDoc, Timestamp, GeoPoint, DocumentReference,
-    type Firestore,
-} from "firebase/firestore"
 
 /* ─────────────── Types ─────────────── */
 type ImportOp = { path: string; data: any; auto?: boolean }
@@ -23,24 +19,6 @@ const isPlainObj = (v: any) => !!v && typeof v === "object" && !Array.isArray(v)
 const trimSlashes = (s: string) => s.trim().replace(/^\/+|\/+$/g, "")
 
 /* ─────────────── Helpers ─────────────── */
-function revive(value: any, firestore: Firestore): any {
-    if (value === null || value === undefined) return value
-    if (typeof value === "string") {
-        if (ISO_RE.test(value)) {
-            const d = new Date(value)
-            if (!isNaN(d.getTime())) return Timestamp.fromDate(d)
-        }
-        if (value.startsWith("ref:")) {
-            const p = trimSlashes(value.slice(4))
-            if (isDocPath(p)) return doc(firestore, p)
-        }
-        return value
-    }
-    if (Array.isArray(value)) return value.map(v => revive(v, firestore))
-    if (isPlainObj(value)) return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, revive(v, firestore)]))
-    return value
-}
-
 /**
  * Supported JSON shapes:
  *  1) { "col/docId": {...}, "col/docId/sub/id": {...} }   ← the format of the JSON download button
@@ -83,14 +61,14 @@ function parseImport(json: any, fileName: string, targetCol: string): ImportOp[]
 export function ImportDialogModal({
     open,
     onOpenChange,
-    firestore,
+    dbKey,
     dbLabel,
     defaultCollection,
     onDone,
 }: {
     open: boolean
     onOpenChange: (o: boolean) => void
-    firestore: Firestore
+    dbKey: "main" | "logs"
     dbLabel: string
     defaultCollection: string
     onDone: (collectionIds: string[]) => void
@@ -142,18 +120,25 @@ export function ImportDialogModal({
         setProgress(0)
         let done = 0
         try {
-            for (let i = 0; i < allOps.length; i += 400) {
-                const chunk = allOps.slice(i, i + 400)
-                const batch = writeBatch(firestore)
-                for (const op of chunk) {
-                    const ref = op.auto ? doc(collection(firestore, op.path)) : doc(firestore, op.path)
-                    const data = restore ? revive(op.data, firestore) : op.data
-                    merge ? batch.set(ref, data, { merge: true }) : batch.set(ref, data)
-                }
-                await batch.commit()
-                done += chunk.length
-                setProgress(done)
-            }
+            const response = await fetch("/api/admin/database-fetching", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-device-id": localStorage.getItem("deviceId") || "",
+                },
+                body: JSON.stringify({
+                    action: "import",
+                    db: dbKey,
+                    operations: allOps,
+                    merge,
+                    restore,
+                }),
+            })
+            const result = await response.json()
+            if (!response.ok) throw new Error(result.error || `Import failed (${response.status})`)
+            done = result.imported
+            setProgress(done)
             const ids = new Set<string>()
             allOps.forEach(op => {
                 const segs = op.path.split("/")
@@ -164,10 +149,8 @@ export function ImportDialogModal({
             onOpenChange(false)
         } catch (e: any) {
             console.error(e)
-            toast.error(
-                (e?.code === "permission-denied" ? "Write blocked by Firestore rules." : `Import failed: ${e?.message || "unknown error"}`) +
-                (done ? ` (${done.toLocaleString()} already saved)` : "")
-            )
+            toast.error(`Import failed: ${e?.message || "unknown error"}` +
+                (done ? ` (${done.toLocaleString()} already saved)` : ""))
         } finally {
             setImporting(false)
         }

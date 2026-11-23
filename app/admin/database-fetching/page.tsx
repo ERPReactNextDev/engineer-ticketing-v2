@@ -307,12 +307,22 @@ export default function DatabaseFetchingPage() {
         setUserId(localStorage.getItem("userId"))
     }, [])
 
-    /* ── Discovery: full → partial → probe ── */
+    const databaseRequest = React.useCallback(async (url: string, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        const deviceId = localStorage.getItem("deviceId") || ""
+        headers.set("x-device-id", deviceId)
+        if (init?.body) headers.set("Content-Type", "application/json")
+        const response = await fetch(url, { ...init, headers, credentials: "same-origin" })
+        const result = await response.json()
+        if (!response.ok) throw new Error(result.error || `Request failed (${response.status})`)
+        return result
+    }, [])
+
+    /* ── Discover collections through the authenticated Admin SDK endpoint ── */
     const discoverCollections = React.useCallback(async (key: DbKey, isCancelled: () => boolean = () => false) => {
         setDiscovering(true)
         setScanDocs(0)
         setScanCols(0)
-        const firestore = DBS[key].instance
         const finish = (list: string[], src: DiscoverySource) => {
             if (isCancelled()) return
             const sorted = [...list].sort((a, b) => a.localeCompare(b))
@@ -324,43 +334,15 @@ export default function DatabaseFetchingPage() {
         }
 
         try {
-            // 1) COMPLETE: every document path, every depth
-            try {
-                const all = await fullScan(
-                    firestore,
-                    (d, c) => { if (!isCancelled()) { setScanDocs(d); setScanCols(c) } },
-                    isCancelled
-                )
-                if (isCancelled()) return
-                finish(all, "full")
-                if (all.length === 0) toast.info("Database appears empty. Paste names manually if needed.")
-                return
-            } catch (e) {
-                console.warn("Full scan blocked, falling back:", e)
-            }
-
-            // 2) PARTIAL: root IDs + sampling
-            try {
-                const roots = await restListCollectionIds(firestore, "")
-                if (isCancelled()) return
-                const all = await sampledScan(firestore, roots, n => !isCancelled() && setScanCols(n), isCancelled)
-                finish(all, "partial")
-                toast.warning("Full scan blocked by your rules. Showing PARTIAL results (sampled).")
-                return
-            } catch (e) {
-                console.warn("REST listing blocked, probing known names:", e)
-            }
-
-            // 3) PROBE
-            const probed = await probeCollections(firestore, CANDIDATE_COLLECTIONS)
-            finish(probed, probed.length ? "probe" : "none")
-            toast.warning(probed.length
-                ? "REST blocked. Showing readable known collections only. Paste the rest manually."
-                : "Nothing could be discovered. Paste collection names manually.")
+            const result = await databaseRequest(`/api/admin/database-fetching?action=collections&db=${key}`)
+            if (isCancelled()) return
+            finish(result.collections || [], "partial")
+            setScanCols((result.collections || []).length)
+            if (!result.collections?.length) toast.info("No collections found.")
         } finally {
             if (!isCancelled()) setDiscovering(false)
         }
-    }, [])
+    }, [databaseRequest])
 
     /* ── On DB change ── */
     React.useEffect(() => {
@@ -406,61 +388,35 @@ export default function DatabaseFetchingPage() {
             const reqId = ++requestIdRef.current
             setLoading(true)
             setLoadedCount(0)
-            const firestore = DBS[dbKey].instance
-            const isPath = name.includes("/")
-            let useGroup = mode === "group" && !isPath
-
-            const makeBase = (): Query<DocumentData> =>
-                useGroup ? collectionGroup(firestore, name) : collection(firestore, name)
-
-            let last: QueryDocumentSnapshot<DocumentData> | null = null
-            let first = true
+            let cursor: string | null = null
 
             try {
                 while (true) {
                     if (reqId !== requestIdRef.current) return
-
-                    const buildQ = () =>
-                        last
-                            ? query(makeBase(), startAfter(last), limit(PAGE_SIZE))
-                            : query(makeBase(), limit(PAGE_SIZE))
-
-                    let snap: QuerySnapshot<DocumentData>
-                    try {
-                        snap = await getDocs(buildQ())
-                    } catch (e: any) {
-                        if (first && useGroup && e?.code === "permission-denied") {
-                            toast.info("Collection group blocked by rules. Showing root collection only.")
-                            useGroup = false
-                            snap = await getDocs(buildQ())
-                        } else throw e
-                    }
+                    const params = new URLSearchParams({
+                        action: "rows",
+                        db: dbKey,
+                        name,
+                        mode,
+                    })
+                    if (cursor) params.set("cursor", cursor)
+                    const result = await databaseRequest(`/api/admin/database-fetching?${params.toString()}`)
                     if (reqId !== requestIdRef.current) return
-                    first = false
-
-                    const newRows: Row[] = snap.docs.map(d => ({
-                        id: d.id,
-                        path: d.ref.path,
-                        data: serialize(d.data()),
-                    }))
-
+                    const newRows = result.rows as Row[]
                     setRows(prev => [...prev, ...newRows])
                     setLoadedCount(prev => prev + newRows.length)
-
-                    if (snap.docs.length < PAGE_SIZE) break
-                    last = snap.docs[snap.docs.length - 1]
+                    cursor = result.nextCursor
+                    if (!cursor) break
                 }
             } catch (e: any) {
                 if (reqId !== requestIdRef.current) return
                 console.error(e)
-                toast.error(e?.code === "permission-denied"
-                    ? "Permission denied by Firestore security rules."
-                    : `Failed to load: ${e?.message || "unknown error"}`)
+                toast.error(`Failed to load: ${e?.message || "unknown error"}`)
             } finally {
                 if (reqId === requestIdRef.current) setLoading(false)
             }
         },
-        [dbKey, mode]
+        [dbKey, mode, databaseRequest]
     )
 
     const selectCollection = (name: string) => {
@@ -540,10 +496,10 @@ export default function DatabaseFetchingPage() {
         if (!editingDoc) return
         setSaving(true)
         try {
-            const firestore = DBS[dbKey].instance
-            const docRef = doc(firestore, editingDoc)
-            const revivedData = revive(editingFields, firestore)
-            await updateDoc(docRef, revivedData)
+            await databaseRequest("/api/admin/database-fetching", {
+                method: "POST",
+                body: JSON.stringify({ action: "update", db: dbKey, path: editingDoc, data: editingFields }),
+            })
             toast.success("Document updated successfully")
             setEditingDoc(null)
             setEditingFields({})
@@ -976,7 +932,7 @@ export default function DatabaseFetchingPage() {
                         <ImportDialogModal
                             open={importOpen}
                             onOpenChange={setImportOpen}
-                            firestore={DBS[dbKey].instance}
+                            dbKey={dbKey}
                             dbLabel={DBS[dbKey].label}
                             defaultCollection={selected ?? ""}
                             onDone={ids => {

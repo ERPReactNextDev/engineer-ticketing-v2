@@ -29,6 +29,7 @@ The JR (Job Request) Form is a critical component in the engineer ticketing syst
 - SLA countdown timer (24-hour limit)
 - Collaboration hub for messaging
 - Procurement columns with Excel paste support
+- Multiple BOQ versions with per-version draft and procurement data
 - PDF document upload and viewing
 
 ---
@@ -117,7 +118,34 @@ The JR (Job Request) Form is a critical component in the engineer ticketing syst
 - Progress tracker visualization (signatures are hidden from the UI)
 - Collaboration hub for messaging (based on job request ID, title shows JR number)
 - Engineer's Console (Admin/Engineering/IT/Procurement - Procurement has view-only access)
+- Job Request Version History below the Photo Gallery
 - Real-time updates via Firestore `onSnapshot` listener
+
+#### Job Request Version History
+
+The detail page's **Version history** button opens snapshots for the request's base `job_request_no`. History is loaded from Supabase `public.job_requests_history`; for multi-BOQ requests, a child reference such as `.1` or `.2` is normalized to the parent request number before querying.
+
+The history dialog shows versions newest first, with the version label, timestamp, operation, and change count. Selecting a version displays grouped request details and marks fields changed from the preceding saved version. Consecutive duplicate snapshots are omitted. Attachments are displayed as a Photo Gallery with image previews and links, and PD Database selections are presented as aligned item cards instead of raw comma-separated values. Internal metadata and fields hidden from the normal snapshot view (including messages and viewed-user state) remain excluded.
+
+If a snapshot has a saved `fill_up_form`, its **View fill up form** action opens a separate read-only viewer. The viewer includes the saved form values, Preferred Date Finish, PD Database items, BOQ sections and cost summaries, and previous/next BOQ navigation. BOQ columns and summaries are department-aware: Engineering sees Engineering BOQ costing only, while Procurement also sees Procurement quantities, acquired costs, procurement totals, Procurement Cost Summary, and Procurement settings. The viewer and history dialog are independently dismissible; closing the form viewer keeps the selected history snapshot open.
+
+The Supabase table `public.job_requests_history` must exist and be readable by the configured job-request client. Apply [`supabase/job_requests_history.sql`](../supabase/job_requests_history.sql) to the same project to install the `job_requests` history trigger. The script uses the existing history table and records insert, update, and delete snapshots; updates that only change `updated_at`, `messages`, or `viewed_status_by_user` are ignored.
+
+#### Job Request Revisions
+
+Sales initiates revisions from Taskflow's original Job Request detail page. The TSA edits a prefilled form, provides Sales Remarks, and submits the revision to `public.job_request_comparison` with status `REVISED JR FORM FORWARD TO TSM`. The original `public.job_requests` record remains unchanged while the revision is reviewed. Submission and review actions have a Yes/Cancel confirmation and upper-right success/error toast.
+
+The revision passes through these decisions:
+
+1. **TSM:** Approve to `REVISED JR FORM FORWARD TO SALES HEAD`, or reject with status `REVISED JR FORM REJECTED BY TSM`.
+2. **Sales Head:** Approve to `REVISED JR FORM FORWARD TO ENGINEERING`, or reject with status `REVISED JR FORM REJECTED BY SALES HEAD`.
+3. **Engineering:** This application displays **View Revision** only for `REVISED JR FORM FORWARD TO ENGINEERING`, with the revision details in the same project-information, contacts, PD Database items, Photo Gallery, and Request Info layout used in Taskflow. Engineering must confirm before approving or rejecting.
+
+On Engineering approval, the revision's changed request fields are applied to the original `public.job_requests` row and the original request returns to `JR FORM FORWARD TO ENGINEERING`. The revision's history snapshot records that final status and the Engineering decision reference. The processed row is then deleted from `public.job_request_comparison`.
+
+On Engineering rejection, the original request is left unchanged. Its revision history snapshot is marked `JR FORM REJECTED BY ENGINEERING` with the Engineering decision reference, and the processed comparison row is deleted. The TSA can then submit another revision from the original request, restarting review at the TSM stage. TSM or Sales Head rejection likewise leaves the original request unchanged and allows the TSA to submit a new revision; prior snapshots stay in Version history.
+
+The two applications share the same Supabase project and revision tables. `public.job_requests_history` needs `sales_remarks` and `engineer_revision_decision_reference_id` in addition to the base history columns; apply the migration maintained in Taskflow's [`supabase/job_request_revision_workflow.sql`](../../task-flow/supabase/job_request_revision_workflow.sql) to the shared project if the columns are missing. The configured Supabase client must have the required select/insert/update/delete access under the project's RLS and authentication setup. Do not disable RLS or use an unrestricted public write policy.
 
 **Actions Available**:
 
@@ -165,16 +193,24 @@ const isEngineering = userContext.role === "engineering" || userContext.role ===
 - Auto-population from Firestore job request document
 - Field locking for auto-populated values
 - Form validation for required fields
-- **Draft Management**: Saves form data to `job_fill_ups` collection via `onSubmit` callback
+- **Draft Management**: Saves BOQ draft data to the existing Supabase `boq_draft` table
 - **View Mode**: Shows saved draft with all fields disabled (read-only)
 - **Edit Mode**: Allows editing of existing drafts or creating new ones
 - Submit functionality: Calls `onSubmit` callback with form values, BOQ sections, and summary
 
 **Draft Management Workflow**:
-- New form: Click "Fill Up Form" → Fill in data → Submit → Saves as draft in `job_fill_ups/{requestId}`
-- Load draft: Click "Load Draft" → View saved draft (read-only) or edit → Submit → Updates existing draft
-- View mode: Shows saved draft with all fields disabled (no submit/clear buttons)
-- **Final Step**: When "Mark as Finished" is clicked, the draft is copied into the job request document (field: `fillUpForm`) and marked as completed
+- New form: Click "Fill Up Form" → Fill in data → Save Draft → Upserts the draft in `public.boq_draft` using the request ID.
+- Load draft: Load the saved draft in view mode or edit mode; edits update the existing `boq_draft` row.
+- View mode: Shows the saved draft read-only; Procurement may edit its permitted costing fields.
+- When Engineering forwards the request to Procurement, the current form snapshot is copied to the request's `fillUpForm` field. When Procurement approves, the finalized BOQ versions are stored in `job_requests.boqs`, and the draft is marked completed.
+
+**Multiple BOQ workflow**:
+- The fixed footer contains a BOQ count input, version navigation arrows, and the active JR/BOQ reference. The count applies automatically shortly after typing (with a short debounce); no separate modal or New BOQ button is used.
+- The count defaults to one. One version uses the base JR number; multiple versions display `.1`, `.2`, and so on (for example, `JR2027-DSI-0001.1`).
+- Increasing the count creates blank versions while preserving existing versions. Decreasing it removes versions after the requested count, including their costing; the active version moves to the last remaining version if needed.
+- Each version maintains its own BOQ sections, summary inputs, and Procurement costing. Saving a draft persists the versions in `boq_draft.boqs`.
+- Engineering can edit the Tools Description, Quantity, Unit, Tool Type, and How Many Usage fields according to the form's role permissions.
+- Apply [`supabase/boq_draft.sql`](../supabase/boq_draft.sql) to the Engineering Supabase project so the existing `boq_draft` table has its `boqs` JSONB column.
 
 **Props Interface**:
 ```typescript
@@ -187,7 +223,9 @@ interface JobFillUpFormDialogProps {
   onSubmit?: (                        // Called on form submit
     values: JobFillUpFormValues,
     boqSections: BoqSection[],
-    summary: BoqSummary
+    summary: BoqSummary,
+    procurement?: ProcurementData,
+    boqs?: BoqVersion[]
   ) => void | Promise<void>;
 }
 ```
@@ -198,6 +236,8 @@ type FillUpDraft = {
   values: JobFillUpFormValues;         // Form field values
   boqSections: BoqSection[];           // Bill of quantities sections
   summary: BoqSummary;                // Project summary with totals
+  boqs?: BoqVersion[];                 // Per-version sections, summaries, and Procurement data
+  procurement?: ProcurementData;      // Procurement data for the active/legacy single BOQ
   status?: "draft" | "completed";     // Draft status
   requestId?: string;                 // Link to job request
   createdBy?: string;                // User ID who created draft
@@ -873,6 +913,7 @@ import { cn } from "@/lib/utils";
 - Formatted preferred dates as Month Day, Year without displaying a time.
 - Allowed the Collaboration Hub to remain interactive while the Fill Up Form dialog is open.
 - Filtered requests already forwarded to TSM or Sales Head out of the Engineering request list.
+- Added multiple BOQ versions, saved per version in `boq_draft.boqs` and published to `job_requests.boqs` after Procurement approval; use the live count input and footer arrows to create and navigate versions.
 
 ---
 
