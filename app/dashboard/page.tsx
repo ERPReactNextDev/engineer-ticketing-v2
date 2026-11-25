@@ -57,6 +57,8 @@ import { DashboardGuide } from "@/components/dashboard-guide";
 import { EnhancedNotifications } from "@/components/enhanced-notifications";
 import { needsJobRequestAttention } from "@/lib/job-request-notifications";
 import { listJobRequests } from "@/lib/job-request-supabase";
+import { getAppointmentSupabaseClient } from "@/lib/appointment-supabase";
+import { needsSiteVisitAttention } from "@/lib/site-visit-notifications";
 
 /* ─────────────────────────────────────────────
    CUSTOM ICON
@@ -1000,6 +1002,7 @@ function EngiconnectDashboardContent() {
         return null
     })
     const [subordinateIds, setSubordinateIds] = useState<string[]>([])
+    const [subordinateReferenceIds, setSubordinateReferenceIds] = useState<string[]>([])
     const [isDataLoading, setIsDataLoading] = useState<boolean>(true)
     const [currentTime, setCurrentTime] = useState(new Date())
     const [weather, setWeather] = useState({ temp: "--", condition: "Syncing...", code: 0 })
@@ -1017,7 +1020,7 @@ function EngiconnectDashboardContent() {
         return null
     })
     const [userDetails, setUserDetails] = useState({
-        Firstname: "", Position: "", Department: "", profilePicture: ""
+        Firstname: "", Position: "", Department: "", ReferenceID: "", profilePicture: ""
     })
     const [notifications, setNotifications] = useState({
         siteVisit: 0, jobRequest: 0, shopDrawing: 0,
@@ -1073,7 +1076,7 @@ function EngiconnectDashboardContent() {
                 // e.g. SALES_TERRITORY SALES ASSOCIATE, ADMIN_STAFF, ADMIN_MANAGER
                 const finalRole = isManager ? "MANAGER" : isTSM ? "TSM" : ((isSalesDept || isAdminDept) && position ? position : primaryRole)
                 const permissionRole = ((isSalesDept || isAdminDept) && position && !position.includes("MEMBER")) ? position : primaryRole
-                setUserDetails({ Firstname: mongoData.Firstname || "User", Position: mongoData.Position || "Member", Department: dept, profilePicture: mongoData.profilePicture || "" })
+                setUserDetails({ Firstname: mongoData.Firstname || "User", Position: mongoData.Position || "Member", Department: dept, ReferenceID: mongoData.ReferenceID || "", profilePicture: mongoData.profilePicture || "" })
                 setUserDept(deptUpper); setUserRole(finalRole)
                 // Set default dashboard tab based on department
                 if (deptUpper === "ADMIN") setActiveTab("Overview")
@@ -1127,6 +1130,12 @@ function EngiconnectDashboardContent() {
                         subs
                             .map(u => u._id ?? u.UserId ?? u.id)
                             .filter(id => id !== null && id !== undefined && String(id).trim() !== "")
+                            .map(String)
+                    )
+                    setSubordinateReferenceIds(
+                        subs
+                            .map(u => u.ReferenceID)
+                            .filter(referenceId => referenceId !== null && referenceId !== undefined && String(referenceId).trim() !== "")
                             .map(String)
                     )
                 }
@@ -1228,6 +1237,92 @@ function EngiconnectDashboardContent() {
     }, [userId, subordinateIds, userDept, userRole])
 
     useEffect(() => {
+        if (!userId || !userDept || !userRole) return
+
+        let isActive = true
+        let requestInProgress = false
+        const appointmentSupabase = getAppointmentSupabaseClient()
+        const department = userDept.toUpperCase()
+        const role = userRole.toUpperCase()
+        const hasGlobalAccess =
+            department === "IT" ||
+            department === "ENGINEERING" ||
+            ["SUPER ADMIN", "LEADER"].includes(role)
+        const visibleSubmitterIds = new Set([
+            userId,
+            userDetails.ReferenceID,
+            ...subordinateIds,
+            ...subordinateReferenceIds,
+        ].filter(Boolean).map(String))
+
+        const refreshSiteVisitNotifications = async () => {
+            if (requestInProgress) return
+            requestInProgress = true
+            try {
+                const { data, error } = await appointmentSupabase
+                    .from("appointments")
+                    .select("status,viewed_status_by_user,submitted_by,messages")
+
+                if (error) throw error
+                if (!isActive) return
+
+                const visibleRows = (data || []).filter(row =>
+                    hasGlobalAccess ||
+                    (row.submitted_by != null && visibleSubmitterIds.has(String(row.submitted_by)))
+                )
+                const unreadStatuses = visibleRows.filter(row => {
+                    const status = typeof row.status === "string" ? row.status.toUpperCase().trim() : ""
+                    const viewedBy = row.viewed_status_by_user
+                    const viewedStatus = viewedBy && typeof viewedBy === "object" && !Array.isArray(viewedBy)
+                        ? (viewedBy as Record<string, unknown>)[userId]
+                        : undefined
+                    return needsSiteVisitAttention(status, department, role) && viewedStatus !== status
+                })
+                const unreadMessages = visibleRows.reduce((total, row) => {
+                    if (!Array.isArray(row.messages)) return total
+                    return total + row.messages.filter(message => {
+                        if (!message || typeof message !== "object") return false
+                        const item = message as { senderId?: unknown; seenBy?: unknown }
+                        return item.senderId !== userId &&
+                            (!Array.isArray(item.seenBy) || !item.seenBy.includes(userId))
+                    }).length
+                }, 0)
+
+                setNotifications(prev => ({
+                    ...prev,
+                    siteVisit: unreadStatuses.length,
+                    unreadByService: { ...prev.unreadByService, siteVisit: unreadMessages },
+                }))
+            } catch (error) {
+                console.error("Failed to load Site Visit status notifications from Supabase:", error)
+            } finally {
+                requestInProgress = false
+            }
+        }
+
+        void refreshSiteVisitNotifications()
+        const channel = appointmentSupabase
+            .channel(`site-visit-status-notifications-${userId}`)
+            .on("postgres_changes", { event: "*", schema: "public", table: "appointments" }, () => {
+                void refreshSiteVisitNotifications()
+            })
+            .subscribe((channelStatus, error) => {
+                if (channelStatus === "CHANNEL_ERROR" || channelStatus === "TIMED_OUT") {
+                    console.error("SITE_VISIT_STATUS_NOTIFICATION_REALTIME_ERROR", error || channelStatus)
+                }
+            })
+        const refreshInterval = window.setInterval(() => {
+            void refreshSiteVisitNotifications()
+        }, 30000)
+
+        return () => {
+            isActive = false
+            window.clearInterval(refreshInterval)
+            void appointmentSupabase.removeChannel(channel)
+        }
+    }, [userId, userDept, userRole, subordinateIds, subordinateReferenceIds, userDetails.ReferenceID])
+
+    useEffect(() => {
         if (!db || !userId) return
         const userRole = conxStorage.getItem("userRole")?.toUpperCase() || "MEMBER"
         const userDept = conxStorage.getItem("userDepartment")?.toUpperCase() || ""
@@ -1257,14 +1352,6 @@ function EngiconnectDashboardContent() {
 
         const unsubSite = onSnapshot(siteQuery, snap => {
             let docs = snap.docs.map((d: any) => ({ id: d.id, ...d.data() }))
-            const isEngSV = userDept === "ENGINEERING" || userDept === "IT"; const isSalesSV = userDept === "SALES"; const isMgrSV = ["SUPER ADMIN", "MANAGER", "LEADER"].includes(userRole)
-            const pending = docs.filter((d: any) => {
-                const s = (d.status || "").toUpperCase(); if (["COMPLETED", "CANCELLED", "DONE"].includes(s)) return false
-                const needEng = s.includes("CONFIRMED") || s.includes("SCHEDULED") || s.includes("APPROVED"); const needSales = s === "PENDING" || s.includes("SUBMITTED")
-                return isMgrSV || (isEngSV && needEng) || (isSalesSV && needSales)
-            }).length
-            const unread = calculateUnread(docs, userId)
-            setNotifications(prev => ({ ...prev, siteVisit: pending, unreadByService: { ...prev.unreadByService, siteVisit: unread } }))
             setMyTasks(prev => ({ ...prev, siteVisits: docs.filter((d: any) => d.pic === userId && d.status !== "COMPLETED") }))
         })
 
@@ -1594,7 +1681,7 @@ function EngiconnectDashboardContent() {
                                             ))}
                                         </div>
                                     </div>
-                                ) : services.length === 0 ? <div className="py-8 text-center"><p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">No services configured</p></div> : <><div className="md:hidden"><div className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar py-2" onScroll={(e) => setCurrentPage(Math.round(e.currentTarget.scrollLeft / e.currentTarget.offsetWidth))} ref={scrollRef}>{[...Array(Math.ceil(services.length / 6))].map((_, pageIndex) => <div key={pageIndex} className="min-w-full grid grid-cols-3 gap-y-5 px-2 snap-center">{services.slice(pageIndex * 6, (pageIndex + 1) * 6).map((service, i) => <button key={i} onClick={() => router.push(service.path)} className="flex flex-col items-center transition-all active:scale-90"><div className="size-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-2.5 relative"><service.icon className="text-[#E33636]" size={26} />{service.count > 0 && <span className="absolute -top-1 -right-1 bg-[#E33636] text-white text-[10px] min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center font-bold border-2 border-white">{service.count > 99 ? "99+" : service.count}</span>}{service.msgCount > 0 && <span className="absolute -bottom-1 -left-1 bg-blue-600 text-white text-[9px] size-5 rounded-full flex items-center justify-center font-bold border-2 border-white"><MessageSquare size={10} fill="currentColor" /></span>}</div><span className="text-[11px] font-bold text-gray-600 text-center leading-tight px-1">{service.label}</span></button>)}</div>)}</div>{Math.ceil(services.length / 6) > 1 && <div className="flex justify-center gap-2 mt-3">{[...Array(Math.ceil(services.length / 6))].map((_, i) => <div key={i} className={cn("h-1.5 rounded-full transition-all duration-300", currentPage === i ? "w-6 bg-[#E33636]" : "w-1.5 bg-gray-200")} />)}</div>}</div><div className="hidden md:grid grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-5">{services.map((service, i) => <button key={i} onClick={() => router.push(service.path)} className="flex flex-col items-center group transition-all hover:-translate-y-1"><div className="size-14 bg-gray-50 rounded-xl flex items-center justify-center mb-2 group-hover:bg-red-50 transition-all relative border border-gray-100"><service.icon className="text-[#E33636]" size={22} />{service.count > 0 && <span className="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[9px] min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center font-bold border-2 border-white">{service.count > 99 ? "99+" : service.count}</span>}{service.msgCount > 0 && <span className="absolute -bottom-1.5 -left-1.5 bg-blue-600 text-white text-[9px] size-5 rounded-full flex items-center justify-center font-bold border-2 border-white shadow-md animate-bounce"><MessageSquare size={10} fill="currentColor" /></span>}</div><span className="text-[10px] font-bold text-gray-500 text-center leading-tight">{service.label}</span></button>)}</div></>}</section>
+                                ) : services.length === 0 ? <div className="py-8 text-center"><p className="text-[10px] font-black text-gray-300 uppercase tracking-widest">No services configured</p></div> : <><div className="md:hidden"><div className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar py-2" onScroll={(e) => setCurrentPage(Math.round(e.currentTarget.scrollLeft / e.currentTarget.offsetWidth))} ref={scrollRef}>{[...Array(Math.ceil(services.length / 6))].map((_, pageIndex) => <div key={pageIndex} className="min-w-full grid grid-cols-3 gap-y-5 px-2 snap-center">{services.slice(pageIndex * 6, (pageIndex + 1) * 6).map((service, i) => <button key={i} onClick={() => router.push(service.path)} className="flex flex-col items-center transition-all active:scale-90"><div className="size-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-2.5 relative"><service.icon className="text-[#E33636]" size={26} />{service.count > 0 && <span className="absolute -top-1 -right-1 bg-[#E33636] text-white text-[10px] min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center font-bold border-2 border-white">{service.count > 99 ? "99+" : service.count}</span>}{service.msgCount > 0 && <span className="absolute -bottom-1 -left-1 bg-blue-600 text-white text-[9px] size-5 rounded-full flex items-center justify-center font-bold border-2 border-white animate-bounce"><MessageSquare size={10} fill="currentColor" /></span>}</div><span className="text-[11px] font-bold text-gray-600 text-center leading-tight px-1">{service.label}</span></button>)}</div>)}</div>{Math.ceil(services.length / 6) > 1 && <div className="flex justify-center gap-2 mt-3">{[...Array(Math.ceil(services.length / 6))].map((_, i) => <div key={i} className={cn("h-1.5 rounded-full transition-all duration-300", currentPage === i ? "w-6 bg-[#E33636]" : "w-1.5 bg-gray-200")} />)}</div>}</div><div className="hidden md:grid grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-5">{services.map((service, i) => <button key={i} onClick={() => router.push(service.path)} className="flex flex-col items-center group transition-all hover:-translate-y-1"><div className="size-14 bg-gray-50 rounded-xl flex items-center justify-center mb-2 group-hover:bg-red-50 transition-all relative border border-gray-100"><service.icon className="text-[#E33636]" size={22} />{service.count > 0 && <span className="absolute -top-1.5 -right-1.5 bg-red-600 text-white text-[9px] min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center font-bold border-2 border-white">{service.count > 99 ? "99+" : service.count}</span>}{service.msgCount > 0 && <span className="absolute -bottom-1.5 -left-1.5 bg-blue-600 text-white text-[9px] size-5 rounded-full flex items-center justify-center font-bold border-2 border-white shadow-md animate-bounce"><MessageSquare size={10} fill="currentColor" /></span>}</div><span className="text-[10px] font-bold text-gray-500 text-center leading-tight">{service.label}</span></button>)}</div></>}</section>
                         {isDataLoading ? <PremiumCardLoading /> : (userDetails.Department?.toUpperCase() === "ADMIN") ? null : <ProductivityHub userDetails={userDetails} tasks={myTasks} schedule={scheduleData} router={router} />}
                         {!isDataLoading && perms?.dashboard?.showAlertBanner !== false && notifications.testingOverdue > 0 && userDetails.Department?.toUpperCase() !== "ADMIN" && <div className="flex items-center justify-between gap-3 bg-[#E33636] text-white px-4 py-3 rounded-2xl shadow-lg cursor-pointer active:scale-[0.99] transition-all" onClick={() => router.push("/request/testing")}><div className="flex items-center gap-2.5"><AlertTriangle size={15} className="flex-shrink-0" /><p className="text-[11px] font-black uppercase tracking-wide">{notifications.testingOverdue} Critical Testing Item{notifications.testingOverdue > 1 ? "s" : ""} — Action Required</p></div><ChevronRight size={14} className="flex-shrink-0 opacity-70" /></div>}
                         

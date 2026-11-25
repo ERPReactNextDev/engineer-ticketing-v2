@@ -24,6 +24,7 @@ import {
 import {
     getAppointmentSupabaseClient,
     normalizeAppointment,
+    markSiteVisitStatusViewed,
     getSiteVisitProtocols,
     getSiteVisitPicOptions,
     resolveSiteVisitPicNames,
@@ -44,6 +45,7 @@ import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/s
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { CollaborationHub } from "@/components/collaboration-hub"
+import { SiteVisitVersionHistoryDialog } from "@/components/site-visit-version-history"
 
 function isSalesManagerRole(role: string, position: string) {
     const normalizedRole = role.toUpperCase().trim()
@@ -53,6 +55,23 @@ function isSalesManagerRole(role: string, position: string) {
         normalizedRole === "SUPER ADMIN" ||
         normalizedPosition.includes("MANAGER") ||
         normalizedPosition.includes("SALES HEAD")
+}
+
+function getAppointmentContacts(appointment: any) {
+    const splitValues = (value: unknown) =>
+        typeof value === "string" ? value.split(",").map((part) => part.trim()) : []
+    const names = splitValues(appointment?.contactPerson)
+    const designations = splitValues(appointment?.designation)
+    const emails = splitValues(appointment?.email)
+    const numbers = splitValues(appointment?.contactNumber)
+    const count = Math.max(names.length, designations.length, emails.length, numbers.length)
+
+    return Array.from({ length: count }, (_, index) => ({
+        name: names[index] || "",
+        designation: designations[index] || "",
+        email: emails[index] || "",
+        number: numbers[index] || "",
+    })).filter((contact) => contact.name || contact.designation || contact.email || contact.number)
 }
 
 export default function AppointmentDetailsPage() {
@@ -143,17 +162,18 @@ export default function AppointmentDetailsPage() {
                         finalPics = ["ENGINEERING_STAFF"];
                     }
 
-                    let picOptions = getSiteVisitPicOptions(finalPics, siteVisitUsers);
+                    const eligibleAssigneeUsers = siteVisitUsers.filter((user) =>
+                        Boolean(user.engiconnect_role?.trim()) &&
+                        user.Department?.trim().toUpperCase() === "ENGINEERING" &&
+                        user.Status?.trim().toUpperCase() === "ACTIVE"
+                    );
+                    let picOptions = getSiteVisitPicOptions(finalPics, eligibleAssigneeUsers);
                     if (
                         picOptions.length === 0 &&
                         finalPics.some((pic) => pic.trim().toUpperCase() === "ENGINEERING_STAFF")
                     ) {
-                        picOptions = siteVisitUsers
-                            .filter((user) =>
-                                user.Department?.trim().toUpperCase() === "ENGINEERING" &&
-                                user.ReferenceID &&
-                                !["RESIGNED", "TERMINATED"].includes(user.Status?.trim().toUpperCase() || "")
-                            )
+                        picOptions = eligibleAssigneeUsers
+                            .filter((user) => user.ReferenceID)
                             .map((user) => ({
                                 referenceId: user.ReferenceID?.trim() || "",
                                 name: `${user.Firstname || ""} ${user.Lastname || ""}`.trim(),
@@ -215,14 +235,15 @@ export default function AppointmentDetailsPage() {
     }, [data, status])
 
     React.useEffect(() => {
-        let unsubscribe: any
-        const establishUplink = async () => {
-            const storedId = localStorage.getItem("userId")
-            if (!storedId) return
+        let isActive = true
+        const storedId = localStorage.getItem("userId")
+        if (!storedId) return
 
+        const loadUserContext = async () => {
             try {
-                const res = await fetch(`/api/user?id=${encodeURIComponent(storedId)}`)
-                const user = await res.json()
+                const response = await fetch(`/api/user?id=${encodeURIComponent(storedId)}`)
+                if (!response.ok) throw new Error(`User lookup failed (${response.status})`)
+                const user = await response.json()
 
                 try {
                     const permissionResponse = await fetch(`/api/permissions/check?userId=${encodeURIComponent(storedId)}`)
@@ -230,93 +251,152 @@ export default function AppointmentDetailsPage() {
                         throw new Error(`Permission check failed (${permissionResponse.status})`)
                     }
                     const permissionData = await permissionResponse.json()
-                    setHasSiteVisitAccess(
-                        permissionData.bypass === true || permissionData.services?.siteVisit === true
-                    )
+                    if (isActive) {
+                        setHasSiteVisitAccess(
+                            permissionData.bypass === true || permissionData.services?.siteVisit === true
+                        )
+                    }
                 } catch (permissionError) {
                     console.error("SITE_VISIT_PERMISSION_ERROR", permissionError)
-                    setHasSiteVisitAccess(false)
+                    if (isActive) setHasSiteVisitAccess(false)
                 }
-                
+
                 const firestoreRole = (user.engiconnect_role || user.Role || user.role || user.Position || "").toUpperCase()
-                
                 const position = (user.Position || "").toUpperCase()
                 const roleCode = (user.RoleCode || "").toUpperCase()
                 const mongoRole = (user.Role || "").toUpperCase()
-                
-                // Prefer the Supabase role, then fall back to the profile role fields.
                 const combinedRole = firestoreRole.includes("MANAGER") || firestoreRole.includes("LEADER")
                     ? firestoreRole
-                    : position.includes("MANAGER") || position.includes("LEADER") || 
+                    : position.includes("MANAGER") || position.includes("LEADER") ||
                       roleCode.includes("MANAGER") || roleCode.includes("LEADER") ||
                       mongoRole.includes("MANAGER") || mongoRole.includes("LEADER")
                       ? (position.includes("ENGINEERING") ? "ENGINEERING MANAGER" : "MANAGER")
                       : roleCode || mongoRole || "STAFF"
-                
-                setUserContext({
-                    role: user.Department?.toLowerCase() || "",
-                    id: storedId,
-                    refId: user.ReferenceID || "",
-                    name: user.Firstname + " " + user.Lastname,
-                    profilePicture: user.ProfilePicture || "",
-                    dept: user.Department?.toLowerCase() || "",
-                    userRole: combinedRole,
-                    position: user.Position || "",
-                })
 
-                const supabase = getAppointmentSupabaseClient()
-                const fetchAppointment = async () => {
-                    const { data: row, error } = await supabase
-                        .from("appointments")
-                        .select("*")
-                        .eq("id", id)
-                        .maybeSingle()
-
-                    if (error) {
-                        console.error("APPOINTMENT_FETCH_ERROR", error)
-                        setLoading(false)
-                        return
-                    }
-
-                    if (row) {
-                        const appointmentData = normalizeAppointment(row)
-                        setData(appointmentData)
-                        setConfNotes((prev) => prev || appointmentData.confirmationNotes || "")
-
-                        if (appointmentData.submittedBy && appointmentData.submittedBy !== "SYSTEM") {
-                            try {
-                                const subRes = await fetch(`/api/user?id=${encodeURIComponent(appointmentData.submittedBy)}`)
-                                const subUser = await subRes.json()
-                                if (subUser?.Firstname) {
-                                    setSubmitterName(`${subUser.Firstname} ${subUser.Lastname}`)
-                                }
-                            } catch (e) { console.error("SUBMITTER_FETCH_ERROR", e) }
-                        }
-                    }
-                    setLoading(false)
+                if (isActive) {
+                    setUserContext({
+                        role: user.Department?.toLowerCase() || "",
+                        id: storedId,
+                        refId: user.ReferenceID || "",
+                        name: user.Firstname + " " + user.Lastname,
+                        profilePicture: user.ProfilePicture || "",
+                        dept: user.Department?.toLowerCase() || "",
+                        userRole: combinedRole,
+                        position: user.Position || "",
+                    })
                 }
-
-                await fetchAppointment()
-                unsubscribe = supabase
-                    .channel(`appointment-${id}`)
-                    .on("postgres_changes", {
-                        event: "*",
-                        schema: "public",
-                        table: "appointments",
-                        filter: `id=eq.${id}`,
-                    }, fetchAppointment)
-                    .subscribe()
-            } catch (err) {
-                toast.error("Failed to connect to the server.")
-                setLoading(false)
+            } catch (error) {
+                console.error("SITE_VISIT_USER_CONTEXT_ERROR", error)
+                if (isActive) toast.error("Unable to load your Site Visit permissions.")
             }
         }
-        establishUplink()
+
+        loadUserContext()
+        return () => { isActive = false }
+    }, [])
+
+    React.useEffect(() => {
+        let isActive = true
+        let fetchInProgress = false
+        let resolvedSubmitterId = ""
+        setLoading(true)
+        setData(null)
+        setSubmitterName("")
+
+        const supabase = getAppointmentSupabaseClient()
+        const fetchAppointment = async () => {
+            if (!isActive || fetchInProgress) return
+            fetchInProgress = true
+            try {
+                const { data: row, error } = await supabase
+                    .from("appointments")
+                    .select("*")
+                    .eq("id", id)
+                    .maybeSingle()
+
+                if (error) throw error
+                if (!isActive) return
+                if (!row) {
+                    setData(null)
+                    setLoading(false)
+                    return
+                }
+
+                const appointmentData = normalizeAppointment(row)
+                setData(appointmentData)
+                setConfNotes((previous) => previous || appointmentData.confirmationNotes || "")
+                setLoading(false)
+
+                if (
+                    appointmentData.submittedBy &&
+                    appointmentData.submittedBy !== "SYSTEM" &&
+                    appointmentData.submittedBy !== resolvedSubmitterId
+                ) {
+                    resolvedSubmitterId = appointmentData.submittedBy
+                    try {
+                        const response = await fetch(`/api/user?id=${encodeURIComponent(appointmentData.submittedBy)}`)
+                        if (!response.ok) throw new Error(`Submitter lookup failed (${response.status})`)
+                        const submitter = await response.json()
+                        if (isActive && submitter?.Firstname) {
+                            setSubmitterName(`${submitter.Firstname} ${submitter.Lastname}`)
+                        }
+                    } catch (error) {
+                        console.error("SUBMITTER_FETCH_ERROR", error)
+                    }
+                }
+            } catch (error) {
+                console.error("APPOINTMENT_FETCH_ERROR", error)
+                if (isActive) setLoading(false)
+            } finally {
+                fetchInProgress = false
+            }
+        }
+
+        const channel = supabase
+            .channel(`appointment-${id}`)
+            .on("postgres_changes", {
+                event: "*",
+                schema: "public",
+                table: "appointments",
+                filter: `id=eq.${id}`,
+            }, () => { void fetchAppointment() })
+            .subscribe((channelStatus, error) => {
+                if (channelStatus === "CHANNEL_ERROR" || channelStatus === "TIMED_OUT") {
+                    console.error("APPOINTMENT_REALTIME_ERROR", error || channelStatus)
+                }
+            })
+
+        void fetchAppointment()
+        const refreshInterval = window.setInterval(() => {
+            if (document.visibilityState === "visible") void fetchAppointment()
+        }, 5000)
+
         return () => {
-            if (typeof unsubscribe === "function") unsubscribe()
-            else unsubscribe?.unsubscribe?.()
+            isActive = false
+            window.clearInterval(refreshInterval)
+            void supabase.removeChannel(channel)
         }
     }, [id])
+
+    React.useEffect(() => {
+        const viewerId = userContext.id
+        const currentStatus = status
+        if (!viewerId || !data?.id || !currentStatus || data.viewedStatusByUser?.[viewerId] === currentStatus) return
+
+        let isActive = true
+        markSiteVisitStatusViewed(String(data.id), viewerId, currentStatus)
+            .then((viewedStatusByUser) => {
+                if (!isActive) return
+                setData({ ...data, viewedStatusByUser })
+            })
+            .catch((error) => {
+                if (!isActive) return
+                console.error("SITE_VISIT_VIEWED_STATUS_ERROR", error)
+                toast.error("Unable to update the Site Visit notification.")
+            })
+
+        return () => { isActive = false }
+    }, [data?.id, data?.viewedStatusByUser, status, userContext.id])
 
     const handleStatusUpdate = async (newStatus: string, additionalData = {}) => {
         if (!hasSiteVisitAccess) {
@@ -508,6 +588,7 @@ export default function AppointmentDetailsPage() {
     const protocolDisplay = protocolLabels.length > 0 
         ? protocolLabels.join(" + ").toUpperCase() 
         : (Array.isArray(data?.protocols) ? data.protocols.join(" + ").toUpperCase() : (data?.protocols?.toUpperCase() || "NOT_DEFINED"))
+    const appointmentContacts = getAppointmentContacts(data)
     const engineerPicDisplay = resolveSiteVisitPicNames(data?.pic, siteVisitUsers)
 
     const formatBookingDate = (ts: any) => {
@@ -693,7 +774,7 @@ export default function AppointmentDetailsPage() {
                                                     <label className="text-[7px] font-black text-slate-400 uppercase tracking-widest ml-1">Select PIC(s)*</label>
                                                     <div className="grid grid-cols-1 gap-1 max-h-[120px] overflow-y-auto pr-1 scrollbar-hide">
                                                         {availablePics.length === 0 ? (
-                                                            <p className="text-[8px] text-slate-400">No eligible users with a ReferenceID were found.</p>
+                                                            <p className="text-[8px] text-slate-400">No eligible active Engineering users were found.</p>
                                                         ) : availablePics.map((pic) => {
                                                             const isChecked = selectedAssignees.includes(pic.referenceId);
                                                             return (
@@ -962,7 +1043,9 @@ export default function AppointmentDetailsPage() {
                                         <div className="p-3 md:p-4 bg-slate-50/10">
                                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
                                                 <ManifestItem label="Date" value={formatBookingDate(data.appointmentDate)} icon={Calendar} isHighlight />
-                                                <ManifestItem label="Support Category" value={protocolDisplay} icon={Wrench} />
+                                                <SupportCategoryList
+                                                    labels={protocolLabels.length > 0 ? protocolLabels : protocolDisplay.split(" + ")}
+                                                />
                                                 <ManifestItem label="Engineer PIC" value={engineerPicDisplay} icon={User} />
                                             </div>
                                         </div>
@@ -971,9 +1054,33 @@ export default function AppointmentDetailsPage() {
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-6">
                                                 <div className="space-y-3">
                                                     <ManifestItem label="Client / Company" value={data.client} icon={Building2} canCopy />
-                                                    <div className="grid grid-cols-2 gap-3 pl-3 border-l border-slate-100">
-                                                        <ManifestItem label="Email Address" value={data.email} icon={MessageSquare} canCopy />
-                                                        <ManifestItem label="Contact Number" value={data.contactNumber} icon={Radio} canCopy />
+                                                    <div className="space-y-2 pl-3 border-l border-slate-100">
+                                                        <div className="flex items-center gap-1.5">
+                                                            <MessageSquare size={10} className="text-slate-400" />
+                                                            <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Account Contacts</span>
+                                                        </div>
+                                                        {appointmentContacts.length > 0 ? (
+                                                            <div className="space-y-2">
+                                                                {appointmentContacts.map((contact, index) => (
+                                                                    <div key={`${contact.name}-${contact.email}-${index}`} className="rounded-lg border border-slate-100 bg-slate-50/50 p-2">
+                                                                        <div className="flex flex-wrap items-baseline gap-x-1.5">
+                                                                            <span className="text-[11px] font-bold text-slate-700">{contact.name || "Unnamed contact"}</span>
+                                                                            {contact.designation && <span className="text-[9px] text-slate-500">{contact.designation}</span>}
+                                                                        </div>
+                                                                        <div className="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-0.5">
+                                                                            {contact.email && <span className="break-all text-[9px] text-slate-600">{contact.email}</span>}
+                                                                            {contact.number && (
+                                                                                <span className="inline-flex w-fit items-center gap-1 rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[8px] font-semibold text-blue-700">
+                                                                                    <Radio size={9} /> {contact.number}
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        ) : (
+                                                            <span className="text-[12px] font-semibold text-slate-700">N/A</span>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <div className="space-y-3">
@@ -1059,9 +1166,15 @@ export default function AppointmentDetailsPage() {
                             </div>
 
                             <div className="flex items-center justify-between gap-3">
-                                <button onClick={() => router.back()} className="px-3 h-7 flex items-center justify-center gap-1.5 text-[7px] font-black text-slate-400 hover:text-blue-600 uppercase tracking-widest transition-all bg-white rounded-lg border border-slate-200 shadow-sm">
-                                    <ChevronLeft size={9} /> Back
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => router.back()} className="px-3 h-7 flex items-center justify-center gap-1.5 text-[7px] font-black text-slate-400 hover:text-blue-600 uppercase tracking-widest transition-all bg-white rounded-lg border border-slate-200 shadow-sm">
+                                        <ChevronLeft size={9} /> Back
+                                    </button>
+                                    <SiteVisitVersionHistoryDialog
+                                        appointmentId={id}
+                                        siteVisitNo={data?.siteVisitNo || id.slice(-8).toUpperCase()}
+                                    />
+                                </div>
                                 <div className="flex items-center gap-1.5">
                                     <span className="text-[6px] font-bold text-slate-300 uppercase tracking-widest">End of Record</span>
                                     <div className="size-1 bg-slate-200 rounded-full" />
@@ -1209,6 +1322,29 @@ function TimelineItem({ label, time, status, desc, dept, isLast = false }: any) 
                 <p className={cn("text-[8px] font-medium leading-none mt-0.5",
                     isCurrent ? "text-amber-600" : "text-slate-500"
                 )}>{desc}</p>
+            </div>
+        </div>
+    )
+}
+
+function SupportCategoryList({ labels }: { labels: string[] }) {
+    return (
+        <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+                <div className="p-1 bg-blue-50 rounded text-blue-600 border border-blue-100">
+                    <Wrench size={10} />
+                </div>
+                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-widest">Support Category</span>
+            </div>
+            <div className="pl-3 border-l border-slate-100 flex flex-wrap gap-1">
+                {labels.length > 0 ? labels.map((label, index) => (
+                    <span
+                        key={`${label}-${index}`}
+                        className="inline-flex rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[8px] font-black uppercase text-blue-700"
+                    >
+                        {label}
+                    </span>
+                )) : <span className="text-[12px] font-semibold text-slate-700">NOT_DEFINED</span>}
             </div>
         </div>
     )

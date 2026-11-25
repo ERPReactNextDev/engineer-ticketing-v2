@@ -5,6 +5,8 @@ import { collection, getDocs, query, where } from "firebase/firestore";
 const FIELD_MAP: Record<string, string> = {
   site_visit_no: "siteVisitNo",
   contact_person: "contactPerson",
+  contact_number: "contactNumber",
+  designation: "designation",
   requestor_phone: "requestorPhone",
   appointment_date: "appointmentDate",
   file_url: "fileUrl",
@@ -14,6 +16,7 @@ const FIELD_MAP: Record<string, string> = {
   sales_head: "salesHead",
   confirmation_notes: "confirmationNotes",
   cancel_reason: "cancelReason",
+  viewed_status_by_user: "viewedStatusByUser",
   pending_at: "pendingAt",
   pending_by: "pendingBy",
   confirmed_at: "confirmedAt",
@@ -63,6 +66,120 @@ export function getAppointmentSupabaseClient() {
   return supabase;
 }
 
+export type AppointmentHistoryRow = Record<string, unknown> & {
+  history_id: string;
+  version_number: number;
+  version_label: string;
+  version_created_at: string;
+  operation: string;
+};
+
+export async function getSiteVisitHistory(appointmentId: string): Promise<AppointmentHistoryRow[]> {
+  const { data, error } = await supabase
+    .from("appointments_history")
+    .select("*")
+    .eq("id", appointmentId)
+    .order("version_created_at", { ascending: false });
+
+  if (error) {
+    const historyError = new Error(error.message || "Failed to fetch Site Visit version history");
+    Object.assign(historyError, { code: error.code, details: error.details, hint: error.hint });
+    throw historyError;
+  }
+
+  return (data ?? []) as AppointmentHistoryRow[];
+}
+
+export async function markSiteVisitStatusViewed(
+  id: string,
+  userId: string,
+  status: string
+): Promise<Record<string, string>> {
+  const { data: existing, error: fetchError } = await supabase
+    .from("appointments")
+    .select("viewed_status_by_user")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (fetchError) {
+    const error = new Error(fetchError.message || "Failed to fetch Site Visit appointment");
+    Object.assign(error, { code: fetchError.code, details: fetchError.details, hint: fetchError.hint });
+    throw error;
+  }
+  if (!existing) throw new Error("Site Visit appointment was not found.");
+
+  const current = existing.viewed_status_by_user;
+  const viewedStatusByUser =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? current as Record<string, string>
+      : {};
+  const next = { ...viewedStatusByUser, [userId]: status };
+  const { data, error: updateError } = await supabase
+    .from("appointments")
+    .update({ viewed_status_by_user: next })
+    .eq("id", id)
+    .select("viewed_status_by_user")
+    .single();
+
+  if (updateError) {
+    const error = new Error(updateError.message || "Failed to mark Site Visit as viewed");
+    Object.assign(error, { code: updateError.code, details: updateError.details, hint: updateError.hint });
+    throw error;
+  }
+  if (!data?.viewed_status_by_user || typeof data.viewed_status_by_user !== "object" || Array.isArray(data.viewed_status_by_user)) {
+    throw new Error("Site Visit viewed status update returned an invalid response.");
+  }
+
+  return data.viewed_status_by_user as Record<string, string>;
+}
+
+export function parseSiteVisitChatMessages(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string" || !value.trim()) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Site Visit messages contain invalid JSON.");
+  }
+
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+export async function getSiteVisitChatMessages(id: string): Promise<unknown[]> {
+  const { data, error } = await supabase
+    .from("appointments")
+    .select("messages")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    const err = new Error(error.message || "Failed to fetch Site Visit messages");
+    Object.assign(err, { code: error.code, details: error.details, hint: error.hint });
+    throw err;
+  }
+  if (!data) throw new Error("Site Visit appointment was not found.");
+
+  return parseSiteVisitChatMessages(data.messages);
+}
+
+export async function saveSiteVisitChatMessages(id: string, messages: unknown[]): Promise<void> {
+  const { data, error } = await supabase
+    .from("appointments")
+    .update({ messages, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    const err = new Error(error.message || "Failed to save Site Visit messages");
+    Object.assign(err, { code: error.code, details: error.details, hint: error.hint });
+    throw err;
+  }
+  if (!data) throw new Error("Site Visit appointment was not found or cannot be updated.");
+}
+
 export interface SiteVisitProtocol {
   id: string;
   label: string;
@@ -78,6 +195,7 @@ export interface SiteVisitUser {
   Lastname?: string | null;
   Department?: string | null;
   Status?: string | null;
+  engiconnect_role?: string | null;
 }
 
 export interface SiteVisitPicOption {

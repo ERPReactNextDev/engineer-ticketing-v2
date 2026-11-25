@@ -10,10 +10,10 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { 
-  Paperclip, Send, ChevronLeft, Layers, Navigation, Loader2,
-  RefreshCw, ShieldCheck, X, User, ChevronRight, 
+  Paperclip, Send, ChevronLeft, Layers, Loader2,
+  ShieldCheck, X, User, ChevronRight,
   ShieldAlert, Fingerprint, ClipboardList, MapPin, 
-  Activity, Info, CheckCircle2, Globe, CalendarSearch,
+  Activity, Info, Globe, CalendarSearch,
   User2, Sparkles, Search, Check, ChevronDown,
   HardHat, ClipboardCheck, FlaskConical
 } from "lucide-react"
@@ -26,7 +26,6 @@ import {
   getAppointmentSupabaseClient,
   toSupabaseTimestamp,
   getSiteVisitProtocols,
-  getSiteVisitPicOptions,
   siteVisitPicMatches,
   type SiteVisitPicOption,
   type SiteVisitUser,
@@ -53,7 +52,58 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command"
-import "leaflet/dist/leaflet.css"
+
+function normalizeAccountValue(value: unknown): string {
+  const text = Array.isArray(value)
+    ? value.map(item => typeof item === "string" ? item.trim() : "").filter(Boolean).join(", ")
+    : typeof value === "string"
+      ? value.trim()
+      : "";
+
+  return ["EMPTY_STRING", "NULL", "N/A", "NONE", "-"].includes(text.toUpperCase()) ? "" : text;
+}
+
+type SiteVisitAccountContact = {
+  name: string;
+  designation: string;
+  email: string;
+  number: string;
+};
+
+function accountContactValues(value: unknown): string[] {
+  const values = Array.isArray(value)
+    ? value.flatMap(item => typeof item === "string" ? item.split(",") : [])
+    : typeof value === "string"
+      ? value.split(",")
+      : [];
+
+  return values.map(item => normalizeAccountValue(item));
+}
+
+function getAccountContacts(account: Record<string, unknown>): SiteVisitAccountContact[] {
+  const names = accountContactValues(account.contact_person ?? account.contactperson);
+  const designations = accountContactValues(account.designation);
+  const emails = accountContactValues(account.email_address ?? account.emailaddress);
+  const numbers = accountContactValues(account.contact_number ?? account.contactnumber);
+  const count = Math.max(names.length, designations.length, emails.length, numbers.length);
+
+  return Array.from({ length: count }, (_, index) => ({
+    name: names[index] || "",
+    designation: designations[index] || "",
+    email: emails[index] || "",
+    number: numbers[index] || "",
+  })).filter(contact => contact.name || contact.designation || contact.email || contact.number);
+}
+
+function selectedContactValues(
+  contacts: SiteVisitAccountContact[],
+  selectedIndexes: number[],
+  key: keyof SiteVisitAccountContact
+): string {
+  return selectedIndexes
+    .map(index => contacts[index]?.[key] || "")
+    .join(", ");
+}
 
 export default function SchedulePage() {
   const router = useRouter();
@@ -70,6 +120,8 @@ export default function SchedulePage() {
   const [loadingUser, setLoadingUser] = React.useState(true);
   const [openCustomer, setOpenCustomer] = React.useState(false);
   const [isCustomerSelected, setIsCustomerSelected] = React.useState(false);
+  const [accountContacts, setAccountContacts] = React.useState<SiteVisitAccountContact[]>([]);
+  const [selectedContactIndexes, setSelectedContactIndexes] = React.useState<number[]>([]);
   const [isTestMode, setIsTestMode] = React.useState(false);
 
   // Pre-calculate memoized accounts for better responsiveness
@@ -211,21 +263,9 @@ export default function SchedulePage() {
   const [selectedPic, setSelectedPic] = React.useState<string>("UNASSIGNED"); 
   const [isLoadingSync, setIsLoadingSync] = React.useState(true);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
-  const [isGeocoding, setIsGeocoding] = React.useState(false);
-  const [coords, setCoords] = React.useState<[number, number] | null>(null);
   const [attachedFile, setAttachedFile] = React.useState<File | null>(null);
   const [allAppointments, setAllAppointments] = React.useState<any[]>([]);
   const [allBlockedSlots, setAllBlockedSlots] = React.useState<any[]>([]);
-
-  // ADDRESS DROPDOWN STATES
-  const [addressOptions, setAddressOptions] = React.useState<string[]>([]);
-  const [openAddress, setOpenAddress] = React.useState(false);
-
-  // PSGC DATA STATES
-  const [regions, setRegions] = React.useState<any[]>([]);
-  const [provinces, setProvinces] = React.useState<any[]>([]);
-  const [cities, setCities] = React.useState<any[]>([]);
-  const [barangays, setBarangays] = React.useState<any[]>([]);
 
   const [formData, setFormData] = React.useState({ 
     client: "", 
@@ -233,118 +273,12 @@ export default function SchedulePage() {
     email: "",
     contactNumber: "",
     address: "", 
-    street: "",
-    barangay: "",
-    city: "",
-    province: "",
     region: "",
-    landmark: "",
     agenda: "",
     notes: "", 
     tsa: "NOT_SET", 
     tsm: "NOT_SET"  
   });
-
-  // FETCH PSGC REGIONS ON MOUNT
-  React.useEffect(() => {
-    const fetchRegions = async () => {
-      try {
-        const res = await fetch("https://psgc.gitlab.io/api/regions/");
-        const data = await res.json();
-        setRegions(data.sort((a: any, b: any) => a.name.localeCompare(b.name)));
-      } catch (err) { console.error("REGIONS_FETCH_ERROR", err); }
-    };
-    fetchRegions();
-  }, []);
-
-  // FETCH PROVINCES WHEN REGION CHANGES
-  React.useEffect(() => {
-    if (!formData.region) {
-      setProvinces([]);
-      return;
-    }
-    const fetchProvinces = async () => {
-      try {
-        const res = await fetch(`https://psgc.gitlab.io/api/regions/${formData.region}/provinces/`);
-        const data = await res.json();
-        setProvinces(data.sort((a: any, b: any) => a.name.localeCompare(b.name)));
-      } catch (err) { console.error("PROVINCES_FETCH_ERROR", err); }
-    };
-    fetchProvinces();
-  }, [formData.region]);
-
-  // FETCH CITIES WHEN PROVINCE CHANGES (OR REGION IF NCR)
-  React.useEffect(() => {
-    if (!formData.province && !formData.region) {
-      setCities([]);
-      return;
-    }
-    
-    const fetchCities = async () => {
-      try {
-        let url = "";
-        if (formData.province) {
-          url = `https://psgc.gitlab.io/api/provinces/${formData.province}/cities-municipalities/`;
-        } else if (formData.region === "130000000") { // NCR logic
-          url = `https://psgc.gitlab.io/api/regions/${formData.region}/cities-municipalities/`;
-        } else {
-          setCities([]);
-          return;
-        }
-
-        const res = await fetch(url);
-        const data = await res.json();
-        setCities(data.sort((a: any, b: any) => a.name.localeCompare(b.name)));
-      } catch (err) { console.error("CITIES_FETCH_ERROR", err); }
-    };
-    fetchCities();
-  }, [formData.province, formData.region]);
-
-  // FETCH BARANGAYS WHEN CITY CHANGES
-  React.useEffect(() => {
-    if (!formData.city) {
-      setBarangays([]);
-      return;
-    }
-    const fetchBarangays = async () => {
-      try {
-        const res = await fetch(`https://psgc.gitlab.io/api/cities-municipalities/${formData.city}/barangays/`);
-        const data = await res.json();
-        setBarangays(data.sort((a: any, b: any) => a.name.localeCompare(b.name)));
-      } catch (err) { console.error("BARANGAYS_FETCH_ERROR", err); }
-    };
-    fetchBarangays();
-  }, [formData.city]);
-
-  // AUTO-POPULATE COMBINED ADDRESS
-  React.useEffect(() => {
-    const r = regions.find(x => x.code === formData.region)?.name || "";
-    const p = provinces.find(x => x.code === formData.province)?.name || "";
-    const c = cities.find(x => x.code === formData.city)?.name || "";
-    const b = barangays.find(x => x.code === formData.barangay)?.name || "";
-    const s = formData.street || "";
-
-    const combined = [s, b, c, p, r].filter(Boolean).join(", ");
-    setFormData(prev => ({ ...prev, address: combined }));
-  }, [formData.region, formData.province, formData.city, formData.barangay, formData.street, regions, provinces, cities, barangays]);
-
-  // FETCH HISTORICAL ADDRESSES — one-time read, limited to 100 docs
-  React.useEffect(() => {
-    const fetchAddresses = async () => {
-      try {
-        const supabase = getAppointmentSupabaseClient();
-        const { data, error } = await supabase
-          .from("appointments")
-          .select("address")
-          .eq("department", "ENGINEERING")
-          .limit(100);
-        if (error) throw error;
-        const addresses = Array.from(new Set((data || []).map(row => row.address))).filter(Boolean) as string[];
-        setAddressOptions(addresses);
-      } catch (err) { console.error(err); }
-    };
-    fetchAddresses();
-  }, []);
 
   // 2. PROTOCOL & PIC SYNC
   React.useEffect(() => {
@@ -368,35 +302,18 @@ export default function SchedulePage() {
       const matched = dbProtocols.filter((proto: any) => activeProtocols.includes(proto.id));
       setProtocolMetadata(matched);
       
-      // LOGIC: IF "INSTALLATION SERVICES" IS SELECTED, ONLY SHOW ITS PICS (Karl and Mark)
-      const installationProtocol = matched.find(p => p.label?.toLowerCase().includes("installation"));
-      
-      let finalPics: any[] = [];
-      if (installationProtocol) {
-        finalPics = Array.from(new Set((installationProtocol.pic || []).map((name: string) => name.trim().toUpperCase())));
-      } else {
-        finalPics = Array.from(new Set(matched.flatMap(p => p.pic || []).map((name: string) => name.trim().toUpperCase())));
-      }
-
-      if (finalPics.length === 0) finalPics = ["ENGINEERING_STAFF"];
-
-      let picOptions = getSiteVisitPicOptions(finalPics, users);
-      if (
-        picOptions.length === 0 &&
-        finalPics.some((pic) => pic.trim().toUpperCase() === "ENGINEERING_STAFF")
-      ) {
-        picOptions = users
-          .filter((user) =>
-            user.Department?.trim().toUpperCase() === "ENGINEERING" &&
-            user.ReferenceID &&
-            !["RESIGNED", "TERMINATED"].includes(user.Status?.trim().toUpperCase() || "")
-          )
-          .map((user) => ({
-            referenceId: user.ReferenceID?.trim() || "",
-            name: `${user.Firstname || ""} ${user.Lastname || ""}`.trim(),
-          }))
-          .filter((pic) => pic.referenceId && pic.name);
-      }
+      const picOptions = users
+        .filter((user) =>
+          Boolean(user.engiconnect_role?.trim()) &&
+          user.Department?.trim().toUpperCase() === "ENGINEERING" &&
+          user.Status?.trim().toUpperCase() === "ACTIVE" &&
+          Boolean(user.ReferenceID?.trim())
+        )
+        .map((user) => ({
+          referenceId: user.ReferenceID?.trim() || "",
+          name: `${user.Firstname || ""} ${user.Lastname || ""}`.trim(),
+        }))
+        .filter((pic) => pic.referenceId && pic.name);
 
       setAssignedPics(picOptions);
       
@@ -435,8 +352,8 @@ export default function SchedulePage() {
       }
 
       setAllAppointments((data || [])
-        .filter((row: any) => assignedPics.some((pic) => siteVisitPicMatches(row.pic, pic)))
-        .map((row: any) => {
+        .filter((row) => assignedPics.some((pic) => siteVisitPicMatches(row.pic, pic)))
+        .map((row) => {
         const date = new Date(row.appointment_date);
         return {
           id: row.id,
@@ -598,13 +515,9 @@ export default function SchedulePage() {
   }
 
   const isComplete = Boolean(
-    formData.client.trim() && 
-    formData.address.trim() && 
-    selectedDate !== null && 
-    formData.region !== "" &&
-    (formData.province !== "" || formData.region === "130000000") &&
-    formData.city !== "" &&
-    formData.barangay !== ""
+    formData.client.trim() &&
+    formData.address.trim() &&
+    selectedDate !== null
   );
   const daysInMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate();
   const firstDayOfMonth = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1).getDay();
@@ -617,28 +530,34 @@ export default function SchedulePage() {
     setSelectedDate(null);
   };
 
+  const updateIncludedContacts = (indexes: number[]) => {
+    setSelectedContactIndexes(indexes);
+    setFormData(prev => ({
+      ...prev,
+      contactPerson: selectedContactValues(accountContacts, indexes, "name"),
+      email: selectedContactValues(accountContacts, indexes, "email"),
+      contactNumber: selectedContactValues(accountContacts, indexes, "number"),
+    }));
+  };
+
+  const toggleAccountContact = (index: number) => {
+    const nextIndexes = selectedContactIndexes.includes(index)
+      ? selectedContactIndexes.filter(selectedIndex => selectedIndex !== index)
+      : [...selectedContactIndexes, index].sort((first, second) => first - second);
+    updateIncludedContacts(nextIndexes);
+  };
+
+  const toggleAllAccountContacts = () => {
+    updateIncludedContacts(
+      selectedContactIndexes.length === accountContacts.length
+        ? []
+        : accountContacts.map((_, index) => index)
+    );
+  };
+
   const handlePicChange = (name: string) => {
     setSelectedPic(name);
     setSelectedDate(null);
-  };
-
-  const handleVerifyMap = async () => {
-    if (formData.address.trim().length < 5) return;
-    setIsGeocoding(true);
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(formData.address)}&addressdetails=1&limit=1`);
-      const data = await res.json();
-      if (data?.[0]) {
-        setCoords([parseFloat(data[0].lat), parseFloat(data[0].lon)]);
-        toast.success("Location verified and pinned.");
-      } else {
-        toast.error("Could not find the address. Please try a more specific location.");
-      }
-    } catch (err) { 
-      console.error(err);
-      toast.error("Map verification failed.");
-    } 
-    finally { setIsGeocoding(false); }
   };
 
   const handleDirectUpload = async (file: File) => {
@@ -699,16 +618,17 @@ export default function SchedulePage() {
         site_visit_no: siteVisitNo,
         client: formData.client,
         contact_person: formData.contactPerson,
+        designation: selectedContactValues(accountContacts, selectedContactIndexes, "designation"),
         email: formData.email,
         contact_number: formData.contactNumber,
         requestor_phone: formData.contactNumber,
         address: formData.address,
-        street: formData.street,
-        landmark: formData.landmark,
-        region: regions.find(x => x.code === formData.region)?.name || "",
-        province: provinces.find(x => x.code === formData.province)?.name || "",
-        city: cities.find(x => x.code === formData.city)?.name || "",
-        barangay: barangays.find(x => x.code === formData.barangay)?.name || "",
+        street: "",
+        landmark: "",
+        region: formData.region,
+        province: "",
+        city: "",
+        barangay: "",
         agenda: formData.agenda,
         notes: formData.notes,
         tsa: formData.tsa,
@@ -719,7 +639,7 @@ export default function SchedulePage() {
         ppe: ppe || [],
         permits: permits || [],
         appointment_date: toSupabaseTimestamp(appointmentDateObj),
-        coordinates: coords,
+        coordinates: null,
         file_url: fileUrl,
         status: "PENDING",
         department: "ENGINEERING",
@@ -1007,6 +927,8 @@ export default function SchedulePage() {
                       {isCustomerSelected && (
                         <button 
                           onClick={() => {
+                            setAccountContacts([]);
+                            setSelectedContactIndexes([]);
                             setFormData(prev => ({
                               ...prev,
                               client: "",
@@ -1015,10 +937,6 @@ export default function SchedulePage() {
                               contactNumber: "",
                               address: "",
                               region: "",
-                              province: "",
-                              city: "",
-                              barangay: "",
-                              street: ""
                             }));
                             setIsCustomerSelected(false);
                           }}
@@ -1088,23 +1006,22 @@ export default function SchedulePage() {
                                   key={account.id}
                                   value={account.company_name}
                                   onSelect={() => {
-                                    const email = Array.isArray(account.email_address) 
-                                      ? account.email_address.join(", ") 
-                                      : account.email_address;
-                                    const contact = Array.isArray(account.contact_number) 
-                                      ? account.contact_number.join(", ") 
-                                      : account.contact_number;
-                                    const person = Array.isArray(account.contact_person)
-                                      ? account.contact_person.join(", ")
-                                      : account.contact_person;
+                                    const contacts = getAccountContacts(account);
+                                    const contactIndexes = contacts.map((_, index) => index);
+                                    const address = normalizeAccountValue(account.address) ||
+                                      normalizeAccountValue(account.delivery_address);
+                                    const region = normalizeAccountValue(account.region);
                                     
+                                    setAccountContacts(contacts);
+                                    setSelectedContactIndexes(contactIndexes);
                                     setFormData(prev => ({
                                       ...prev,
-                                      client: account.company_name,
-                                      contactPerson: person || prev.contactPerson,
-                                      email: email || prev.email,
-                                      contactNumber: contact || prev.contactNumber,
-                                      address: account.address || prev.address
+                                      client: normalizeAccountValue(account.company_name),
+                                      contactPerson: selectedContactValues(contacts, contactIndexes, "name"),
+                                      email: selectedContactValues(contacts, contactIndexes, "email"),
+                                      contactNumber: selectedContactValues(contacts, contactIndexes, "number"),
+                                      address,
+                                      region,
                                     }));
                                     setIsCustomerSelected(true);
                                     setOpenCustomer(false);
@@ -1133,39 +1050,79 @@ export default function SchedulePage() {
                     <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest transition-all group-focus-within:text-zinc-900 z-10">Client Name*</label>
                   </div>
                   <div className="relative group">
-                    <Input 
-                      className="rounded-xl border-zinc-100 text-[11px] font-black uppercase h-9 bg-zinc-50/50 focus:bg-white focus:ring-2 focus:ring-zinc-900 px-3 shadow-inner pt-3.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed" 
-                      placeholder=" " 
-                      value={formData.contactPerson} 
-                      onChange={e => setFormData({...formData, contactPerson: e.target.value})}
-                      disabled={isCustomerSelected}
-                    />
-                    <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest transition-all group-focus-within:text-zinc-900">Contact Person</label>
-                  </div>
-                  <div className="relative group">
                     <Input className="rounded-xl border-zinc-100 text-[11px] font-black uppercase h-9 bg-zinc-50/50 focus:bg-white focus:ring-2 focus:ring-zinc-900 px-3 shadow-inner pt-3.5 transition-all" placeholder=" " value={formData.agenda} onChange={e => setFormData({...formData, agenda: e.target.value})} />
                     <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest transition-all group-focus-within:text-zinc-900">Objective*</label>
                   </div>
-                  <div className="relative group">
-                    <Input 
-                      className="rounded-xl border-zinc-100 text-[11px] font-black uppercase h-9 bg-zinc-50/50 focus:bg-white focus:ring-2 focus:ring-zinc-900 px-3 shadow-inner pt-3.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed" 
-                      placeholder=" " 
-                      value={formData.email} 
-                      onChange={e => setFormData({...formData, email: e.target.value})}
-                      disabled={isCustomerSelected}
-                    />
-                    <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest transition-all group-focus-within:text-zinc-900">Email Address</label>
+                </div>
+                <div className="space-y-2 border-t border-zinc-50 pt-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[8px] font-black uppercase text-zinc-400 tracking-widest">Account Contact(s)</span>
+                    <div className="flex items-center gap-2">
+                      {accountContacts.length > 0 && (
+                        <>
+                          <span className="text-[8px] font-semibold text-zinc-500">
+                            {selectedContactIndexes.length} of {accountContacts.length} included
+                          </span>
+                          <button
+                            type="button"
+                            onClick={toggleAllAccountContacts}
+                            className="text-[8px] font-black uppercase text-blue-600 hover:underline"
+                          >
+                            {selectedContactIndexes.length === accountContacts.length ? "Clear all" : "Select all"}
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="relative group">
-                    <Input 
-                      className="rounded-xl border-zinc-100 text-[11px] font-black uppercase h-9 bg-zinc-50/50 focus:bg-white focus:ring-2 focus:ring-zinc-900 px-3 shadow-inner pt-3.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed" 
-                      placeholder=" " 
-                      value={formData.contactNumber} 
-                      onChange={e => setFormData({...formData, contactNumber: e.target.value})}
-                      disabled={isCustomerSelected}
-                    />
-                    <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest transition-all group-focus-within:text-zinc-900">Contact Number</label>
-                  </div>
+                  {accountContacts.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {accountContacts.map((contact, index) => {
+                        const isIncluded = selectedContactIndexes.includes(index);
+                        return (
+                          <article
+                            key={`${contact.name}-${contact.email}-${index}`}
+                            className={cn(
+                              "rounded-xl border p-2.5 transition-colors",
+                              isIncluded ? "border-emerald-200 bg-emerald-50/30" : "border-zinc-100 bg-zinc-50/40"
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <span className="text-[7px] font-black uppercase tracking-widest text-emerald-700">Account Contact</span>
+                              <label className="flex items-center gap-1.5 text-[8px] font-semibold text-zinc-600 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={isIncluded}
+                                  onChange={() => toggleAccountContact(index)}
+                                  aria-label={`Include ${contact.name || `contact ${index + 1}`}`}
+                                  className="accent-emerald-600"
+                                />
+                                {isIncluded ? "Included" : "Not included"}
+                              </label>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              {[
+                                { label: "Contact person", value: contact.name },
+                                { label: "Designation", value: contact.designation },
+                                { label: "Email address", value: contact.email },
+                                { label: "Contact number", value: contact.number },
+                              ].map((field) => (
+                                <div key={field.label} className="min-w-0">
+                                  <span className="block text-[7px] font-black uppercase text-zinc-400">{field.label}</span>
+                                  <span className="block truncate text-[10px] font-semibold text-zinc-700" title={field.value}>
+                                    {field.value || "Not provided"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="rounded-lg border border-dashed border-zinc-200 p-2.5 text-[9px] text-zinc-400">
+                      {isCustomerSelected ? "No saved contact details are available for this account." : "Select a client to load its contact details."}
+                    </p>
+                  )}
                 </div>
                 <div className="relative group">
                   <Textarea className="rounded-xl border-zinc-100 text-[11px] font-black uppercase min-h-[50px] lg:min-h-[60px] lg:max-h-[80px] bg-zinc-50/50 focus:bg-white focus:ring-2 focus:ring-zinc-900 p-3 pt-4.5 resize-none leading-relaxed shadow-inner transition-all" placeholder=" " value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} />
@@ -1174,7 +1131,7 @@ export default function SchedulePage() {
               </div>
 
               {/* LOCATION INFO SECTION */}
-              <div className="p-3 md:p-4 space-y-2 flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div className="p-3 md:p-4 space-y-2 flex flex-col min-h-0 overflow-hidden">
                 <div className="flex items-center justify-between border-b border-zinc-50 pb-1.5 shrink-0">
                   <div className="flex items-center gap-2">
                     <div className="size-5 bg-amber-50 rounded-lg flex items-center justify-center text-amber-600 shadow-sm border border-amber-100">
@@ -1185,132 +1142,20 @@ export default function SchedulePage() {
                       <p className="text-[6px] font-bold text-zinc-400 uppercase tracking-widest mt-0.5 leading-none">Site Geographic Metadata</p>
                     </div>
                   </div>
-                  <button onClick={handleVerifyMap} className="h-7 px-2.5 text-[8px] font-black uppercase flex items-center gap-1.5 hover:bg-zinc-100 transition-all bg-zinc-50 rounded-lg border border-zinc-100 text-zinc-600 shadow-sm active:scale-95">
-                    {isGeocoding ? <Loader2 className="size-3 animate-spin" /> : <Navigation className="size-3" />} 
-                    Verify Site
-                  </button>
                 </div>
                 
-                <div className="space-y-2.5 overflow-y-auto pr-0.5 scrollbar-hide flex-1">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-                    <div className="relative group">
-                      <select 
-                        className="w-full h-9 px-3 rounded-xl bg-zinc-50/50 border border-zinc-100 text-[11px] font-black uppercase outline-none focus:ring-2 focus:ring-zinc-900 transition-all appearance-none shadow-inner pt-3.5 disabled:opacity-70 disabled:cursor-not-allowed"
-                        value={formData.region}
-                        onChange={(e) => setFormData({ ...formData, region: e.target.value, province: "", city: "", barangay: "" })}
-                      >
-                        <option value=""></option>
-                        {regions.map(r => <option key={r.code} value={r.code}>{r.name}</option>)}
-                      </select>
-                      <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest group-focus-within:text-zinc-900">Region</label>
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 size-3 text-zinc-400 pointer-events-none mt-1" />
-                    </div>
-                    <div className="relative group">
-                      <select 
-                        className="w-full h-9 px-3 rounded-xl bg-zinc-50/50 border border-zinc-100 text-[11px] font-black uppercase outline-none focus:ring-2 focus:ring-zinc-900 transition-all appearance-none disabled:opacity-50 shadow-inner pt-3.5 disabled:opacity-70 disabled:cursor-not-allowed"
-                        value={formData.province}
-                        disabled={!formData.region || formData.region === "130000000"}
-                        onChange={(e) => setFormData({ ...formData, province: e.target.value, city: "", barangay: "" })}
-                      >
-                        <option value="">{formData.region === "130000000" ? "NCR" : ""}</option>
-                        {provinces.map(p => <option key={p.code} value={p.code}>{p.name}</option>)}
-                      </select>
-                      <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest group-focus-within:text-zinc-900">Province</label>
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 size-3 text-zinc-400 pointer-events-none mt-1" />
-                    </div>
-                    <div className="relative group">
-                      <select 
-                        className="w-full h-9 px-3 rounded-xl bg-zinc-50/50 border border-zinc-100 text-[11px] font-black uppercase outline-none focus:ring-2 focus:ring-zinc-900 transition-all appearance-none disabled:opacity-50 shadow-inner pt-3.5 disabled:opacity-70 disabled:cursor-not-allowed"
-                        value={formData.city}
-                        disabled={!formData.province && formData.region !== "130000000"}
-                        onChange={(e) => setFormData({ ...formData, city: e.target.value, barangay: "" })}
-                      >
-                        <option value=""></option>
-                        {cities.map(c => <option key={c.code} value={c.code}>{c.name}</option>)}
-                      </select>
-                      <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest group-focus-within:text-zinc-900">City</label>
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 size-3 text-zinc-400 pointer-events-none mt-1" />
-                    </div>
-                    <div className="relative group">
-                      <select 
-                        className="w-full h-9 px-3 rounded-xl bg-zinc-50/50 border border-zinc-100 text-[11px] font-black uppercase outline-none focus:ring-2 focus:ring-zinc-900 transition-all appearance-none disabled:opacity-50 shadow-inner pt-3.5 disabled:opacity-70 disabled:cursor-not-allowed"
-                        value={formData.barangay}
-                        disabled={!formData.city}
-                        onChange={(e) => setFormData({ ...formData, barangay: e.target.value })}
-                      >
-                        <option value=""></option>
-                        {barangays.map(b => <option key={b.code} value={b.code}>{b.name}</option>)}
-                      </select>
-                      <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest group-focus-within:text-zinc-900">Barangay</label>
-                      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 size-3 text-zinc-400 pointer-events-none mt-1" />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div className="relative group">
-                      <Input 
-                        className="rounded-xl border-zinc-100 text-[11px] font-black uppercase h-9 bg-zinc-50/50 focus:bg-white focus:ring-2 focus:ring-zinc-900 px-3 shadow-inner pt-3.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed" 
-                        placeholder=" " 
-                        value={formData.street} 
-                        onChange={e => setFormData({...formData, street: e.target.value})}
-                      />
-                      <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest transition-all group-focus-within:text-zinc-900">Street / House No. / Unit</label>
-                    </div>
-                    <div className="relative group">
-                      <Input 
-                        className="rounded-xl border-zinc-100 text-[11px] font-black uppercase h-9 bg-zinc-50/50 focus:bg-white focus:ring-2 focus:ring-zinc-900 px-3 shadow-inner pt-3.5 transition-all disabled:opacity-70 disabled:cursor-not-allowed" 
-                        placeholder=" " 
-                        value={formData.landmark} 
-                        onChange={e => setFormData({...formData, landmark: e.target.value})}
-                      />
-                      <label className="absolute left-3 top-1 text-[7px] font-black uppercase text-zinc-400 tracking-widest transition-all group-focus-within:text-zinc-900">Landmark / Building Name</label>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5 pt-0.5 shrink-0">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[8px] font-black uppercase text-zinc-400 tracking-widest ml-1 flex items-center gap-1.5">
-                        <Globe size={10} /> Generated Address Output
-                      </span>
-                      <Popover open={openAddress} onOpenChange={setOpenAddress}>
-                        <PopoverTrigger asChild>
-                          <button className="text-[6px] font-black uppercase text-blue-600 hover:underline flex items-center gap-1 transition-all active:scale-95">
-                            <RefreshCw size={8} /> Search History
-                          </button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-[280px] p-0 rounded-xl shadow-2xl border-none" align="end">
-                          <Command className="rounded-xl">
-                            <CommandInput placeholder="Search records..." className="h-9 text-[11px] font-black uppercase" />
-                            <CommandList className="max-h-[140px] scrollbar-hide">
-                              <CommandEmpty className="py-3 text-[9px] font-black text-zinc-400 uppercase text-center tracking-widest">No records found</CommandEmpty>
-                              <CommandGroup heading="Historical Sites" className="p-1">
-                                {addressOptions.map((addr) => (
-                                  <CommandItem key={addr} value={addr} onSelect={() => { setFormData({ ...formData, address: addr }); setOpenAddress(false); }} className="rounded-lg text-[9px] font-black uppercase py-1.5 px-2.5 mb-1 hover:bg-zinc-50 cursor-pointer transition-all">
-                                    <Check className={cn("mr-2 h-2.5 w-2.5 text-blue-600", formData.address === addr ? "opacity-100" : "opacity-0")} />
-                                    <span className="truncate">{addr}</span>
-                                  </CommandItem>
-                                ))}
-                              </CommandGroup>
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
-                    </div>
-                    <div className="relative group">
-                      <Input className="rounded-xl border-zinc-100 text-[11px] font-black uppercase h-10 bg-zinc-100/50 p-2.5 shadow-inner truncate pr-20 transition-all" value={formData.address || "ADDRESS WILL AUTO-GENERATE..."} readOnly />
-                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
-                        {coords ? (
-                          <div className="flex items-center gap-1 px-1.5 py-0.5 bg-emerald-500 text-white rounded-md text-[6px] font-black uppercase shadow-lg shadow-emerald-500/20">
-                            <CheckCircle2 size={8} /> Site Pinned
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1 px-1.5 py-0.5 bg-zinc-200 text-zinc-400 rounded-md text-[6px] font-black uppercase">
-                            <MapPin size={8} /> Unverified
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                <div className="flex flex-col gap-2">
+                  <label htmlFor="deployment-address" className="text-[8px] font-black uppercase text-zinc-400 tracking-widest ml-1">
+                    Deployment Address
+                  </label>
+                  <Textarea
+                    id="deployment-address"
+                    className="w-full h-[72px] min-h-[72px] max-h-[96px] rounded-xl border-zinc-100 text-xs font-semibold bg-zinc-50/50 p-3 resize-none leading-relaxed shadow-inner read-only:bg-slate-50 read-only:text-slate-500"
+                    placeholder="Select a client to automatically load its saved address."
+                    value={formData.address}
+                    readOnly
+                  />
+                  <p className="text-[8px] text-zinc-400">Automatically loaded from the selected client&apos;s address.</p>
                 </div>
               </div>
             </div>

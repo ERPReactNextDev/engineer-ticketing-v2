@@ -57,6 +57,7 @@ import {
   resolveSiteVisitPicNames,
   SITE_VISIT_PROTOCOL_LABELS,
 } from "@/lib/appointment-supabase"
+import { needsSiteVisitAttention } from "@/lib/site-visit-notifications"
 
 // CUSTOM COMPONENTS
 import { PageHeader } from "@/components/page-header"
@@ -1112,6 +1113,9 @@ export default function SiteVisitListPage() {
                     ) : (
                       paginatedVisits.map((item) => {
                         const meta = getStatusMeta(item.status)
+                        const hasUnreadPing = user.id !== null &&
+                          needsSiteVisitAttention(item.status, user.dept, user.role) &&
+                          item.viewedStatusByUser?.[user.id] !== item.status
                         return (
                           <div 
                             key={item.fullId}
@@ -1124,9 +1128,19 @@ export default function SiteVisitListPage() {
                                 {/* Row 1: ID, Client, Status */}
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="flex flex-col min-w-0 flex-1">
-                                    <span className="text-[11px] font-black text-emerald-600 tracking-tight uppercase truncate">
-                                      {item.siteVisitNo || `#${item.id}`}
-                                    </span>
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="text-[11px] font-black text-emerald-600 tracking-tight uppercase truncate">
+                                        {item.siteVisitNo || `#${item.id}`}
+                                      </span>
+                                      {hasUnreadPing && (
+                                        <span
+                                          aria-label="New Site Visit notification"
+                                          className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-red-500 text-[9px] font-black leading-none text-white shadow-sm"
+                                        >
+                                          1
+                                        </span>
+                                      )}
+                                    </div>
                                     <span className="text-[11px] font-black text-zinc-900 uppercase leading-tight truncate">{item.site}</span>
                                   </div>
                                   <div className="flex items-center gap-2 shrink-0">
@@ -1166,10 +1180,18 @@ export default function SiteVisitListPage() {
 
                             {/* DESKTOP VIEW - Table Layout */}
                             {/* SITE VISIT NUMBER */}
-                            <div className="hidden md:flex items-center overflow-hidden">
+                            <div className="hidden md:flex items-center gap-1.5 overflow-hidden">
                               <span className="text-[10px] font-black text-emerald-600 tracking-tight uppercase truncate">
                                 {item.siteVisitNo || `#${item.id}`}
                               </span>
+                              {hasUnreadPing && (
+                                <span
+                                  aria-label="New Site Visit notification"
+                                  className="inline-flex size-4 shrink-0 items-center justify-center rounded-full bg-red-500 text-[9px] font-black leading-none text-white shadow-sm"
+                                >
+                                  1
+                                </span>
+                              )}
                             </div>
 
                             {/* Client */}
